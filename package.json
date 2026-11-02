@@ -1,0 +1,13 @@
+{
+  "name": "naoplanar",
+  "version": "0.1.0",
+  "description": "Fatiamento não planar (cônico) para impressoras 3D de 3 eixos, como pós-processador do OrcaSlicer/PrusaSlicer.",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "naoplanar": "src/cli.ts" },
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "funil": "node ferramentas/gerar-funil.ts exemplos/funil.stl"
+  }
+}
