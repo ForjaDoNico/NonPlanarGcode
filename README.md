@@ -12,11 +12,11 @@ Fatiamento **não planar** (camadas cônicas) para impressoras 3D comuns de 3 ei
 
 Com θ positivo as camadas descem para fora, então balanços que abrem para fora (funil, cogumelo, beiral) passam a ser impressos sem suporte. Com θ negativo, as camadas sobem para fora.
 
-A opção `--base` mantém as primeiras camadas planas para a peça grudar na mesa e faz uma transição suave até o cone completo.
+A opção `--base` mantém as primeiras camadas planas para a peça grudar na mesa e faz uma transição suave até o cone completo. Use-a sempre com θ positivo: sem ela, as camadas encostam na mesa em ângulo e o bico pode raspar nela. Na transição, o ângulo cresce aos poucos e as camadas ficam mais finas (até a metade da altura configurada, na borda da peça) com θ positivo, ou mais grossas com θ negativo. A extrusão é ajustada para compensar, desde que **Use relative E distances** esteja ativo.
 
 ![Corte lateral do G-code final](exemplos/corte-funil.png)
 
-O corte acima é do modelo de teste (`exemplos/funil.stl`): uma haste com um funil a 50° da vertical, que no fatiamento plano precisaria de suporte. Com camadas de 30°, os perímetros seguem a parede inclinada. O verificador confirmou que todos os 151 mil pontos de extrusão ficam dentro da peça original.
+O corte acima é do modelo de teste (`exemplos/funil.stl`): uma haste com um funil a 50° da vertical, que no fatiamento plano precisaria de suporte. A imagem foi gerada antes da correção da transição e ainda mostra a inclinação antiga, de cerca de 4° a 13° na parede. Com `--angulo 30 --base 1`, a inclinação agora vai de 11° no início da parede a 30° a partir de cerca de 18 mm de altura.
 
 ## Uso
 
@@ -46,7 +46,8 @@ Testes: `npm test`. Exemplo completo: `npm run funil`, e depois os comandos acim
 - **Colisão:** o bico precisa caber no ângulo. Use θ menor que o ângulo do cone do bico/hotend (em geral 30° a 40° é o limite seguro). Ainda não há verificação automática.
 - **Topos planos ficam em degraus**, porque para a malha deformada eles viram superfícies inclinadas. O próximo modo (camadas de topo que seguem a superfície) resolve isso.
 - **Deslocamentos longos sobem e descem** junto com o cone. Não colidem com o que já foi impresso, mas são mais lentos.
-- A espessura real da camada, medida perpendicular ao cone, é `altura × cos(θ)`. A extrusão ainda não é compensada (`--fator-e` existe para testes manuais).
+- A espessura real da camada, medida perpendicular ao cone, é `altura × cos(θ)`. A extrusão só é compensada na zona de transição da base; esse efeito do cone ainda não é compensado (`--fator-e` existe para testes manuais).
+- **Saia e brim sem `--base`:** com θ positivo, o trecho fora da peça ficaria abaixo da mesa, e o `retransformar` recusa o G-code com um erro.
 - Um eixo de cone por peça. Várias peças na mesa ainda não são suportadas.
 
 ## Comparação com o Boxily (Boxislicer)

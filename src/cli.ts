@@ -74,9 +74,12 @@ function principal(argv: string[]): void {
   if (comando === "deformar") {
     const angulo = numero(o.angulo, "angulo");
     if (Math.abs(angulo) >= 60) throw new Error("Use um ângulo entre -60 e 60 graus.");
+    const baseMm = numero(o.base, "base", 0);
+    if (angulo > 0 && baseMm <= 0)
+      console.warn("Aviso: sem --base, as camadas encostam na mesa em ângulo e o bico pode raspar nela. Use --base 1, por exemplo.");
     const tris = lerStl(arquivo);
     const r = deformarMalha(tris, angulo, {
-      base: numero(o.base, "base", 0),
+      base: baseMm,
       maxAresta: numero(o.aresta, "aresta", 1),
       centro: lerPar(o.centro),
     });

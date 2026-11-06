@@ -71,9 +71,23 @@ export interface Mapeamento {
 export function criarMapeamento(anguloGraus: number, base: number, raioMaximo: number): Mapeamento {
   const tan = tanAngulo(anguloGraus);
   // Para θ < 0 a transição precisa ser mais longa que r·|tan| em todo raio, senão z' deixaria
-  // de crescer com z. Usamos o dobro para ter folga.
-  const transicao = base > 0 ? Math.max(2 * raioMaximo * Math.abs(tan), 1) : 0;
+  // de crescer com z. Usamos o dobro para ter folga. Para θ > 0 não há esse risco, mas uma
+  // transição curta demais afina as camadas (ver espessuraRelativa): com T = r·tan, a camada
+  // na borda da peça chega à metade da altura configurada.
+  const folga = tan < 0 ? 2 : 1;
+  const transicao = base > 0 ? Math.max(folga * raioMaximo * Math.abs(tan), 1) : 0;
   return { tan, base, transicao };
+}
+
+/**
+ * Espessura real da camada (na vertical) em relação à altura configurada no fatiador.
+ * Fora da transição vale 1. Dentro dela, z = (zl + k·b/T) / (1 + k/T), logo dz/dzl = 1 / (1 + k/T).
+ */
+export function espessuraRelativa(m: Mapeamento, r: number, zl: number): number {
+  if (m.base <= 0 || zl <= m.base) return 1;
+  const k = r * m.tan;
+  if (zl >= m.base + m.transicao + k) return 1;
+  return 1 / (1 + k / m.transicao);
 }
 
 export function paraDeformado(m: Mapeamento, r: number, z: number): number {
@@ -101,11 +115,9 @@ export function deformarMalha(
   const { min, max } = caixa(trisOriginais);
   const meioX = (min[0] + max[0]) / 2, meioY = (min[1] + max[1]) / 2;
   const centro = opcoes.centro ?? [meioX, meioY];
-  const raioMaximo = Math.max(
-    ...[[min[0], min[1]], [min[0], max[1]], [max[0], min[1]], [max[0], max[1]]].map(([x, y]) =>
-      Math.hypot(x - centro[0], y - centro[1]),
-    ),
-  );
+  let raioMaximo = 0;
+  for (const t of trisOriginais)
+    for (const [x, y] of t) raioMaximo = Math.max(raioMaximo, Math.hypot(x - centro[0], y - centro[1]));
   const mapa = criarMapeamento(anguloGraus, opcoes.base ?? 0, raioMaximo);
   const tris = subdividir(trisOriginais, opcoes.maxAresta ?? 1);
   let zMin = Infinity;

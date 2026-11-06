@@ -4,7 +4,10 @@
 // aplicamos o mapeamento inverso (ver conico.ts). Como Z passa a variar ao longo de cada
 // linha reta, os movimentos são quebrados em segmentos curtos.
 
-import { paraReal, type Mapeamento } from "./conico.ts";
+import { espessuraRelativa, paraReal, type Mapeamento } from "./conico.ts";
+
+// Altura mínima dos deslocamentos sem extrusão, para o bico não raspar a mesa.
+const Z_MINIMO_DESLOCAMENTO = 0.2;
 
 export interface ParametrosRetransformacao {
   mapa: Mapeamento;
@@ -56,9 +59,27 @@ function lerPalavras(cmd: string): Palavras {
 }
 
 const fmt = (n: number, casas: number) => {
-  const s = n.toFixed(casas).replace(/\.?0+$/, "");
+  const fixo = n.toFixed(casas);
+  // Só há zeros supérfluos depois da vírgula: F1200 precisa continuar F1200.
+  const s = fixo.includes(".") ? fixo.replace(/\.?0+$/, "") : fixo;
   return s === "-0" ? "0" : s;
 };
+
+/**
+ * Índice da linha em que começa o código final da impressão. Marcadores de código personalizado
+ * também aparecem no meio da impressão, então só valem os que vêm depois da última camada e
+ * não são seguidos por outro tipo de trecho da peça.
+ */
+function encontrarInicioDoFinal(linhas: string[]): number {
+  const ultimaCamada = linhas.findLastIndex(ehMudancaDeCamada);
+  let fim = linhas.length;
+  for (let i = linhas.length - 1; i > ultimaCamada && ultimaCamada >= 0; i--) {
+    const tipo = tipoDaLinha(linhas[i]);
+    if (tipo !== null && !/^custom/i.test(tipo)) break;
+    if (ehInicioDoFinal(linhas[i])) fim = i;
+  }
+  return fim;
+}
 
 /** Primeira passada: encontra o centro XY da peça pelos movimentos de extrusão dela. */
 export function detectarCentro(linhas: string[]): [number, number] | null {
@@ -115,13 +136,18 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
 
   // Posição no espaço deformado (como o fatiador vê).
   let x = 0, y = 0, z = 0, e = 0;
-  let eRelativo = false, absoluto = true, ativo = false, terminou = false;
-  let zMin = Infinity, zMax = -Infinity, transformadas = 0, segmentos = 0, abaixoDaMesa = 0;
+  let eRelativo = false, absoluto = true, ativo = false;
+  // Até o G-code definir os três eixos, o bico está onde o código inicial o deixou (por exemplo,
+  // uma macro PRINT_START). Sem saber a origem, esses movimentos não podem ser interpolados.
+  const conhecido = { X: false, Y: false, Z: false };
+  let zMin = Infinity, zMax = -Infinity, transformadas = 0, segmentos = 0;
+  let extrusoesAbaixoDaMesa = 0, deslocamentosElevados = 0, semCompensacao = 0;
   const saida: string[] = [];
+  const inicioDoFinal = encontrarInicioDoFinal(linhas);
 
-  for (const bruta of linhas) {
-    if (!terminou && ehMudancaDeCamada(bruta)) ativo = true;
-    if (ativo && ehInicioDoFinal(bruta)) { ativo = false; terminou = true; }
+  for (const [indice, bruta] of linhas.entries()) {
+    if (indice < inicioDoFinal && ehMudancaDeCamada(bruta)) ativo = true;
+    if (indice === inicioDoFinal) ativo = false;
 
     const [cmdBruto, ...resto] = bruta.split(";");
     const comentario = resto.length ? ";" + resto.join(";") : "";
@@ -147,8 +173,16 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
     if (ativo && ehMovimento && !absoluto)
       throw new Error("Movimento relativo (G91) dentro das camadas não é suportado neste protótipo.");
 
-    if (!ehMovimento || !ativo || (p.X === undefined && p.Y === undefined && p.Z === undefined)) {
-      // Fora da área da peça, ou sem movimento de eixo: copia como está, mas acompanha a posição.
+    const origemConhecida = conhecido.X && conhecido.Y && conhecido.Z;
+    if ((ehMovimento && absoluto) || codigo === "G92") {
+      if (p.X !== undefined) conhecido.X = true;
+      if (p.Y !== undefined) conhecido.Y = true;
+      if (p.Z !== undefined) conhecido.Z = true;
+    }
+
+    if (!ehMovimento || !ativo || !origemConhecida || (p.X === undefined && p.Y === undefined && p.Z === undefined)) {
+      // Fora da área da peça, sem origem conhecida ou sem movimento de eixo: copia como está,
+      // mas acompanha a posição.
       if (ehMovimento) {
         if (absoluto) { x = p.X ?? x; y = p.Y ?? y; z = p.Z ?? z; }
         else { x += p.X ?? 0; y += p.Y ?? 0; z += p.Z ?? 0; }
@@ -164,18 +198,30 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
     const eFinal = p.E === undefined ? e : eRelativo ? e + p.E : p.E;
     const dist = Math.hypot(nx - x, ny - y);
     const n = Math.max(1, Math.ceil(dist / seg));
+    const extrudindo = eFinal > eInicial && dist > 0;
     transformadas++;
     for (let i = 1; i <= n; i++) {
       const f = i / n;
       const sx = x + (nx - x) * f, sy = y + (ny - y) * f, sz = z + (nz - z) * f;
-      const zr = zReal(sx, sy, sz);
+      let zr = zReal(sx, sy, sz);
+      if (extrudindo && zr < -0.01) extrusoesAbaixoDaMesa++;
+      if (!extrudindo && zr < Z_MINIMO_DESLOCAMENTO) { zr = Z_MINIMO_DESLOCAMENTO; deslocamentosElevados++; }
+      zr = Math.max(zr, 0);
       if (zr < zMin) zMin = zr;
       if (zr > zMax) zMax = zr;
-      if (zr < -0.01) abaixoDaMesa++;
-      let linha = `G1 X${fmt(sx, 3)} Y${fmt(sy, 3)} Z${fmt(Math.max(zr, 0), 3)}`;
+      let linha = `G1 X${fmt(sx, 3)} Y${fmt(sy, 3)} Z${fmt(zr, 3)}`;
       if (p.E !== undefined) {
-        if (eRelativo) linha += ` E${fmt(((eFinal - eInicial) / n) * fatorE, 5)}`;
-        else linha += ` E${fmt(eInicial + (eFinal - eInicial) * f, 5)}`;
+        // Avalia a espessura no meio do segmento, para compensar o afinamento na transição.
+        const fm = (i - 0.5) / n;
+        const raioMeio = Math.hypot(x + (nx - x) * fm - centro[0], y + (ny - y) * fm - centro[1]);
+        const espessura = extrudindo
+          ? espessuraRelativa(params.mapa, raioMeio, z + (nz - z) * fm + params.deslocamentoZ)
+          : 1;
+        if (eRelativo) linha += ` E${fmt(((eFinal - eInicial) / n) * fatorE * espessura, 5)}`;
+        else {
+          if (espessura !== 1) semCompensacao++;
+          linha += ` E${fmt(eInicial + (eFinal - eInicial) * f, 5)}`;
+        }
       }
       if (i === 1 && p.F !== undefined) linha += ` F${fmt(p.F, 0)}`;
       if (i === 1 && comentario) linha += " " + comentario;
@@ -187,8 +233,12 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
 
   if (fatorE !== 1 && !eRelativo)
     avisos.push("O fator de extrusão só é aplicado com extrusão relativa (M83). Ative \"Use relative E distances\" no fatiador.");
-  if (abaixoDaMesa > 0)
-    avisos.push(`${abaixoDaMesa} pontos ficariam abaixo da mesa e foram limitados a Z=0. Confira o ângulo e a base da peça.`);
+  if (extrusoesAbaixoDaMesa > 0)
+    throw new Error(`${extrusoesAbaixoDaMesa} pontos de extrusão ficariam abaixo da mesa. Use --base no passo deformar (recomendado) ou desative saia e brim no fatiador.`);
+  if (deslocamentosElevados > 0)
+    avisos.push(`${deslocamentosElevados} pontos de deslocamento foram elevados a Z=${Z_MINIMO_DESLOCAMENTO} para o bico não raspar a mesa.`);
+  if (semCompensacao > 0)
+    avisos.push("A extrusão não foi compensada na zona de transição, onde as camadas ficam mais finas ou mais grossas. Ative \"Use relative E distances\" no fatiador.");
   if (transformadas === 0) avisos.push("Nenhum movimento foi transformado. O G-code tem marcadores ;LAYER_CHANGE?");
 
   return {
