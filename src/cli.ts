@@ -4,8 +4,8 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
 import { lerStl, escreverStl } from "./stl.ts";
 import { deformarMalha, type Mapeamento } from "./conico.ts";
-import { retransformarGcode } from "./gcode.ts";
-import { CABECOTE_PADRAO } from "./colisao.ts";
+import { jaTransformado, retransformarGcode } from "./gcode.ts";
+import { buscarPeca, lerPerfil, nomeDaPeca, pecasNoGcode, perfilFoiConfigurado, registrarPeca, salvarPerfil, type ParametrosPeca, type Perfil } from "./config.ts";
 
 const AJUDA = `naoplanar: fatiamento cônico (não planar) para impressoras de 3 eixos
 
@@ -14,8 +14,15 @@ Fluxo:
        Gera peca.naoplanar.stl e peca.naoplanar.json
   2. Fatie peca.naoplanar.stl no OrcaSlicer ou PrusaSlicer como uma peça normal
        (desative "Arc fitting"; prefira extrusão relativa, M83)
-  3. naoplanar retransformar peca.gcode --params peca.naoplanar.json [--saida final.gcode]
-       Sem --saida, o arquivo é sobrescrito (útil como script de pós-processamento)
+  3. naoplanar retransformar peca.gcode [--saida final.gcode]
+       Acha os parâmetros da peça pelo nome dentro do G-code. Sem --saida, o arquivo é
+       sobrescrito, então o OrcaSlicer pode chamar este comando como script de
+       pós-processamento e o passo 3 acontece sozinho ao exportar (veja o README).
+       G-code sem peça do naoplanar passa sem mudanças.
+
+Perfil da impressora (salvo em ~/.naoplanar/perfil.json, usado pelo retransformar):
+  naoplanar perfil                          mostra o perfil atual
+  naoplanar perfil --folga 7 --z-max 5      salva os valores informados
 
 Opções de deformar:
   --angulo   graus do cone. Positivo: camadas descem para fora (balanços para fora).
@@ -26,13 +33,15 @@ Opções de deformar:
   --saida    nome do STL deformado
 
 Opções de retransformar:
-  --params   arquivo .naoplanar.json gerado no passo 1 (obrigatório)
+  --params   arquivo .naoplanar.json gerado no passo 1 (opcional: sem ele, a peça é
+             procurada pelo nome no G-code)
   --centro   eixo do cone x,y na mesa (padrão: detectado no G-code)
   --segmento comprimento máximo de cada segmento em mm (padrão 1)
   --fator-e  multiplicador de extrusão (padrão 1)
   --saida    arquivo de saída
 
-Checagem de colisão (feita no retransformar; se houver colisão, nada é gravado):
+Checagem de colisão (feita no retransformar; se houver colisão, nada é gravado).
+Estas opções sobrepõem o perfil salvo só nesta execução; no comando perfil, elas são salvas:
   --folga        altura livre, em mm, entre a ponta do bico e a parte mais baixa do
                  cabeçote (padrão 5). Meça na sua impressora: veja o README.
   --raio-cabeca  até quantos mm do bico o cabeçote se estende na horizontal (padrão 30)
@@ -43,14 +52,6 @@ Checagem de colisão (feita no retransformar; se houver colisão, nada é gravad
   --z-max        velocidade máxima do eixo Z no firmware, em mm/s (max_z_velocity).
                  Avisa quando o firmware vai desacelerar a impressão.
 `;
-
-interface ArquivoParametros {
-  versao: 1;
-  anguloGraus: number;
-  deslocamentoZ: number;
-  centroRelativo: [number, number];
-  mapa: Mapeamento;
-}
 
 function lerPar(txt: string | undefined): [number, number] | undefined {
   if (!txt) return undefined;
@@ -83,6 +84,25 @@ function principal(argv: string[]): void {
   });
   const [comando, arquivo] = positionals;
   if (o.ajuda || !comando) { console.log(AJUDA); return; }
+
+  if (comando === "perfil") {
+    const mudancas: Partial<Perfil> = {};
+    if (o.folga !== undefined) mudancas.folga = numero(o.folga, "folga");
+    if (o["raio-cabeca"] !== undefined) mudancas.raioCabeca = numero(o["raio-cabeca"], "raio-cabeca");
+    if (o["raio-bico"] !== undefined) mudancas.raioBico = numero(o["raio-bico"], "raio-bico");
+    if (o["z-max"] !== undefined) mudancas.zMax = numero(o["z-max"], "z-max");
+    if (o.segmento !== undefined) mudancas.segmento = numero(o.segmento, "segmento");
+    if (Object.keys(mudancas).length) {
+      const { perfil, caminho } = salvarPerfil(mudancas);
+      console.log(`Perfil salvo em ${caminho}:`);
+      console.log(JSON.stringify(perfil, null, 2));
+    } else {
+      console.log(perfilFoiConfigurado() ? "Perfil atual:" : "Nenhum perfil salvo ainda. Valores padrão:");
+      console.log(JSON.stringify(lerPerfil(), null, 2));
+    }
+    return;
+  }
+
   if (!arquivo) throw new Error("Informe o arquivo de entrada.");
 
   if (comando === "deformar") {
@@ -101,33 +121,68 @@ function principal(argv: string[]): void {
     const saida = o.saida ?? `${base}.naoplanar.stl`;
     const json = saida.replace(/\.stl$/i, "") + ".json";
     escreverStl(saida, r.triangulos);
-    const params: ArquivoParametros = {
+    const params: ParametrosPeca = {
       versao: 1, anguloGraus: angulo, deslocamentoZ: r.deslocamentoZ,
       centroRelativo: r.centroRelativo, mapa: r.mapa,
     };
     writeFileSync(json, JSON.stringify(params, null, 2));
+    const registro = registrarPeca(nomeDaPeca(saida), params);
     console.log(`Malha deformada: ${saida} (${tris.length} → ${r.triangulos.length} triângulos)`);
-    console.log(`Parâmetros: ${json}`);
-    console.log("Agora fatie a malha deformada e rode \"naoplanar retransformar\" no G-code.");
+    console.log(`Parâmetros: ${json} (também registrados em ${registro})`);
+    console.log("Agora fatie a malha deformada no OrcaSlicer. Com o script de pós-processamento configurado,");
+    console.log("o G-code exportado já sai não planar. Sem ele, rode \"naoplanar retransformar\" no G-code.");
     return;
   }
 
   if (comando === "retransformar") {
-    if (!o.params) throw new Error("Informe --params com o arquivo .naoplanar.json do passo deformar.");
-    const params = JSON.parse(readFileSync(o.params, "utf8")) as ArquivoParametros;
-    const r = retransformarGcode(readFileSync(arquivo, "utf8"), {
+    const texto = readFileSync(arquivo, "utf8");
+    if (jaTransformado(texto)) {
+      console.log("Este G-code já foi transformado pelo naoplanar. Arquivo mantido sem mudanças.");
+      return;
+    }
+    let params: ParametrosPeca;
+    if (o.params) params = JSON.parse(readFileSync(o.params, "utf8")) as ParametrosPeca;
+    else {
+      // Sem --params: procura a peça pelo nome dentro do G-code (uso como script do OrcaSlicer).
+      const nomes = pecasNoGcode(texto);
+      if (nomes.length === 0) {
+        if (!/printing object|EXCLUDE_OBJECT/i.test(texto))
+          throw new Error(
+            "O G-code não tem os nomes das peças, então não dá para saber se alguma foi deformada pelo naoplanar. " +
+            "Ative \"Label objects\" no OrcaSlicer (Processo > Outros), ou use --params.",
+          );
+        console.log("Nenhuma peça do naoplanar neste G-code. Arquivo mantido sem mudanças.");
+        return;
+      }
+      const achadas = new Map<string, { params: ParametrosPeca; caminho: string }>();
+      for (const n of nomes) {
+        const a = buscarPeca(n);
+        if (a) achadas.set(a.caminho, a);
+      }
+      if (achadas.size === 0)
+        throw new Error(`O G-code tem a peça "${nomes[0]}", mas ela não está registrada. Rode "naoplanar deformar" de novo ou use --params.`);
+      if (achadas.size > 1)
+        throw new Error("O G-code tem mais de uma peça do naoplanar. Por enquanto, imprima uma peça por vez.");
+      const [a] = achadas.values();
+      params = a.params;
+      console.log(`Parâmetros da peça: ${a.caminho}`);
+    }
+    const perfil = lerPerfil();
+    const folga = numero(o.folga, "folga", perfil.folga);
+    const zMax = numero(o["z-max"], "z-max", perfil.zMax);
+    const r = retransformarGcode(texto, {
       mapa: params.mapa,
       deslocamentoZ: params.deslocamentoZ,
       centroRelativo: params.centroRelativo,
       centro: lerPar(o.centro),
-      segmento: numero(o.segmento, "segmento", 1),
+      segmento: numero(o.segmento, "segmento", perfil.segmento),
       fatorExtrusao: numero(o["fator-e"], "fator-e", 1),
       cabecote: o["sem-checar-colisao"] ? null : {
-        folga: numero(o.folga, "folga", CABECOTE_PADRAO.folga),
-        raioCabeca: numero(o["raio-cabeca"], "raio-cabeca", CABECOTE_PADRAO.raioCabeca),
-        raioBico: numero(o["raio-bico"], "raio-bico", CABECOTE_PADRAO.raioBico),
+        folga,
+        raioCabeca: numero(o["raio-cabeca"], "raio-cabeca", perfil.raioCabeca),
+        raioBico: numero(o["raio-bico"], "raio-bico", perfil.raioBico),
       },
-      zMaximo: o["z-max"] === undefined ? undefined : numero(o["z-max"], "z-max"),
+      zMaximo: zMax > 0 ? zMax : undefined,
     });
     const c = r.colisao;
     if (c && c.colisoes > 0) {
@@ -137,8 +192,8 @@ function principal(argv: string[]): void {
         `A primeira colisão é em X${p.x.toFixed(1)} Y${p.y.toFixed(1)} Z${p.z.toFixed(1)}, com material ${p.invasao.toFixed(1)} mm ` +
         `acima da parte mais baixa do cabeçote, a ${p.distancia.toFixed(1)} mm do bico (a pior passa ${pior.invasao.toFixed(1)} mm). ` +
         `Este arquivo precisa de pelo menos ${c.folgaNecessaria.toFixed(1)} mm de folga, e a configurada é ` +
-        `${numero(o.folga, "folga", CABECOTE_PADRAO.folga)} mm. Diminua o --angulo no passo deformar, ` +
-        `ou informe a folga real do seu cabeçote com --folga.`;
+        `${folga} mm${perfilFoiConfigurado() ? "" : " (valor padrão, sem perfil salvo)"}. Diminua o --angulo no passo deformar, ` +
+        `ou salve a folga real do seu cabeçote com "naoplanar perfil --folga N".`;
       if (!o["ignorar-colisao"]) throw new Error(msg + " Nada foi gravado. Use --ignorar-colisao para gravar mesmo assim.");
       console.warn(`Aviso: ${msg}`);
     }
@@ -152,7 +207,7 @@ function principal(argv: string[]): void {
     return;
   }
 
-  throw new Error(`Comando desconhecido: ${comando}. Use "deformar" ou "retransformar".`);
+  throw new Error(`Comando desconhecido: ${comando}. Use "deformar", "retransformar" ou "perfil".`);
 }
 
 try {
