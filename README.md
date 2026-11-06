@@ -25,7 +25,7 @@ Requer Node.js 22.18 ou mais novo (roda TypeScript direto, sem compilar).
 ```sh
 node src/cli.ts deformar peca.stl --angulo 30 --base 1
 # fatie peca.naoplanar.stl no OrcaSlicer e exporte o G-code
-node src/cli.ts retransformar peca.gcode --params peca.naoplanar.json --saida peca.final.gcode
+node src/cli.ts retransformar peca.gcode --saida peca.final.gcode
 ```
 
 No fatiador:
@@ -33,11 +33,48 @@ No fatiador:
 - ative **Use relative E distances** (recomendado);
 - pode posicionar a peça onde quiser na mesa, mas não gire: o centro do cone é detectado no G-code.
 
-Também dá para usar como script de pós-processamento do OrcaSlicer (sem `--saida` o arquivo é sobrescrito):
+### Retransformar automático no OrcaSlicer
 
+Configure uma vez e o passo 3 acontece sozinho sempre que você exportar ou enviar o G-code:
+
+1. No Terminal, descubra onde está o Node com `which node` (no Mac costuma ser `/opt/homebrew/bin/node` ou `/usr/local/bin/node`).
+2. No OrcaSlicer, em **Processo > Outros > Scripts de pós-processamento** (Post-processing Scripts), coloque uma linha com o caminho do Node, o caminho do `cli.ts` e a palavra `retransformar`:
+
+   ```
+   /opt/homebrew/bin/node /Users/voce/NonPlanarGcode/src/cli.ts retransformar
+   ```
+
+3. Deixe **Label objects** ligado (Processo > Outros). É pelo nome da peça no G-code que o naoplanar sabe quais parâmetros usar.
+4. Salve o processo. Pode deixar o script sempre ligado:
+   - peças comuns passam sem nenhuma mudança;
+   - peças `*.naoplanar.stl` são transformadas com os parâmetros que o `deformar` registrou em `~/.naoplanar/pecas/`;
+   - um arquivo já transformado nunca é transformado de novo;
+   - se houver colisão, o Orca mostra o erro e não exporta.
+
+Não renomeie a peça dentro do Orca: o nome precisa continuar terminando em `.naoplanar`.
+
+### Perfil da impressora
+
+Os ajustes da impressora ficam salvos em `~/.naoplanar/perfil.json` e valem para todo `retransformar`, inclusive o automático:
+
+```sh
+node src/cli.ts perfil --folga 7 --z-max 5   # salva
+node src/cli.ts perfil                       # mostra
 ```
-node /caminho/naoplanar/src/cli.ts retransformar --params /caminho/peca.naoplanar.json
+
+Opções passadas direto no `retransformar` valem só naquela execução.
+
+## Topo liso
+
+Com camadas cônicas, um topo plano (ou qualquer topo que não tenha o formato do cone) sai em degraus da altura de uma camada. Com `--topo-liso` no `deformar`, a última camada de topo sobe até a superfície real da peça, e a extrusão aumenta na mesma proporção para preencher a camada mais grossa. Os deslocamentos sobre o topo passam por cima dele.
+
+```sh
+node src/cli.ts deformar peca.stl --angulo 15 --base 1 --topo-liso
 ```
+
+O `retransformar` lê o STL original para conhecer a superfície, então não mova nem apague esse arquivo. Ele também lê a altura de camada que o fatiador grava no G-code. Funciona com os tipos "Top surface" (OrcaSlicer), "Top solid infill" (PrusaSlicer) e "Ironing". `--sem-topo-liso` desliga o modo numa execução.
+
+No funil de exemplo a 15°, a última camada do topo variava 0,15 mm de altura e passou a ficar toda a 28,00 mm. A extrusão do topo aumentou 22%.
 
 ## Checagem de colisão
 
@@ -49,11 +86,7 @@ A folga depende do seu cabeçote, então meça antes de imprimir:
 2. Meça da mesa até a parte mais baixa do cabeçote, sem contar o bico.
 3. Subtraia 10. O resultado é a `--folga`.
 
-```sh
-node src/cli.ts retransformar peca.gcode --params peca.naoplanar.json --folga 7 --z-max 5
-```
-
-Sem `--folga`, o padrão é 5 mm. A checagem considera o cabeçote até 30 mm do bico (`--raio-cabeca`) e ignora o material a menos de 1,5 mm da ponta (`--raio-bico`), onde o bico alisa a linha vizinha.
+Salve o valor no perfil (`node src/cli.ts perfil --folga 7`). Sem perfil, o padrão é 5 mm. A checagem considera o cabeçote até 30 mm do bico (`--raio-cabeca`) e ignora o material a menos de 1,5 mm da ponta (`--raio-bico`), onde o bico alisa a linha vizinha.
 
 Referência, com o funil de exemplo e `--base 1`: a 15° ele precisa de 5,8 mm de folga, e a 30° precisa de 9,8 mm. Como regra geral, a folga necessária cresce com `largura da peça × tan(θ)`.
 
@@ -64,9 +97,9 @@ Testes: `npm test`. Exemplo completo: `npm run funil`, e depois os comandos acim
 ## Limitações conhecidas
 
 - **Colisão:** a checagem usa um modelo simples do cabeçote (um cilindro fino para o bico e um plano para o resto). Ela não conhece o formato exato do seu cabeçote, então um duto que desce mais de um lado precisa ser medido pelo lado mais baixo.
-- **Topos planos ficam em degraus**, porque para a malha deformada eles viram superfícies inclinadas. O próximo modo (camadas de topo que seguem a superfície) resolve isso.
+- **Topos ficam em degraus** sem `--topo-liso`. Com ele, só a última camada sobe até a superfície, então a camada de baixo ainda tem degraus, que ficam escondidos.
 - **Deslocamentos longos sobem e descem** junto com o cone. Não colidem com o que já foi impresso, mas são mais lentos.
-- A espessura real da camada, medida perpendicular ao cone, é `altura × cos(θ)`. A extrusão só é compensada na zona de transição da base; esse efeito do cone ainda não é compensado (`--fator-e` existe para testes manuais).
+- A camada cônica é mais fina na perpendicular (`altura × cos θ`), mas o volume entre duas camadas é o mesmo das camadas planas, então a extrusão do fatiador já está certa. Só a zona de transição da base precisa de compensação, e ela é feita (`--fator-e` existe para testes manuais).
 - **Saia e brim sem `--base`:** com θ positivo, o trecho fora da peça ficaria abaixo da mesa, e o `retransformar` recusa o G-code com um erro.
 - Um eixo de cone por peça. Várias peças na mesa ainda não são suportadas.
 
