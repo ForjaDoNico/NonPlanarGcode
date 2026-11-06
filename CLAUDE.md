@@ -8,6 +8,7 @@ Projeto open source de fatiamento não planar (camadas cônicas) para impressora
 3. `src/gcode.ts`: desfaz a deformação no G-code, quebrando cada movimento em segmentos de até 1 mm.
 - `src/colisao.ts`: checagem de colisão do cabeçote (mapa de alturas) e aviso de velocidade do Z, chamada pelo `retransformar`.
 - `src/config.ts`: perfil da impressora (`~/.naoplanar/perfil.json`) e registro das peças deformadas (`~/.naoplanar/pecas/<nome>.json`). O `retransformar` sem `--params` acha a peça pelo nome `<nome>.naoplanar` no G-code, o que permite usá-lo como script de pós-processamento do OrcaSlicer. Pasta sobreposta por `NAOPLANAR_DIR` (usado nos testes).
+- `src/topo.ts`: modo de topo liso (`--topo-liso`). Mapa de alturas do STL original; no `retransformar`, pontos de topo a menos de uma camada da superfície sobem até ela, com extrusão proporcional, e deslocamentos perto do topo passam por cima.
 - `src/cli.ts`: comandos `deformar`, `retransformar` e `perfil`. `src/stl.ts`: leitura e escrita de STL.
 - `ferramentas/`: gerador do modelo de teste (funil) e verificador que gera um corte lateral em SVG.
 
@@ -18,7 +19,7 @@ Projeto open source de fatiamento não planar (camadas cônicas) para impressora
 
 ## Plano
 1. Pesquisa e protótipo de linha de comando: **feito**, testado com G-code real do OrcaSlicer, ainda sem teste em impressora real.
-2. Motor principal: checagem de colisão do bico, perfis de impressora, modo de topo que segue a superfície (hoje topos planos saem em degraus), compensação de extrusão do efeito cos θ (a da transição já existe).
+2. Motor principal: checagem de colisão, perfil da impressora, script automático no OrcaSlicer e topo liso **feitos** (PRs #2 a #4). A compensação de cos θ não é necessária: o volume entre camadas cônicas é igual ao das planas.
 3. App para Mac em PT-BR (i18n desde o início) e integração como script de pós-processamento do OrcaSlicer.
 4. Lançamento open source: GitHub, licença MIT, instalador .dmg, documentação em PT-BR.
 
