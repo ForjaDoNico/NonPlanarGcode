@@ -1,3 +1,4 @@
 node_modules/
 exemplos/*.gcode
 exemplos/*.naoplanar.stl
+.DS_Store
