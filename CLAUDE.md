@@ -6,6 +6,7 @@ Projeto open source de fatiamento não planar (camadas cônicas) para impressora
 1. `src/conico.ts`: deforma o STL (z' = z + r·tan θ, com base plana opcional) e tem o mapeamento inverso.
 2. O usuário fatia a malha deformada no OrcaSlicer (camadas planas).
 3. `src/gcode.ts`: desfaz a deformação no G-code, quebrando cada movimento em segmentos de até 1 mm.
+- `src/colisao.ts`: checagem de colisão do cabeçote (mapa de alturas) e aviso de velocidade do Z, chamada pelo `retransformar`.
 - `src/cli.ts`: comandos `deformar` e `retransformar`. `src/stl.ts`: leitura e escrita de STL.
 - `ferramentas/`: gerador do modelo de teste (funil) e verificador que gera um corte lateral em SVG.
 
@@ -21,7 +22,7 @@ Projeto open source de fatiamento não planar (camadas cônicas) para impressora
 4. Lançamento open source: GitHub, licença MIT, instalador .dmg, documentação em PT-BR.
 
 ## Limitações atuais
-Sem arcos G2/G3 (desativar Arc fitting), sem G91 dentro das camadas, um eixo de cone por peça, travels sobem e descem junto com o cone. Sem checagem automática de colisão nem de velocidade do eixo Z.
+Sem arcos G2/G3 (desativar Arc fitting), sem G91 dentro das camadas, um eixo de cone por peça, travels sobem e descem junto com o cone. A checagem de colisão modela o cabeçote como bico fino + plano a `--folga` mm, até `--raio-cabeca` mm.
 
 ## Estado em 2026-11-06
 Nada desta sessão foi commitado: há mudanças em `src/`, `test/`, `README.md` e `exemplos/funil.naoplanar.json`, além de `CLAUDE.md` e `exemplos/funil15.naoplanar.json` sem rastreio. `corte-funil.png` e `corte-funil.svg` já tinham alterações antes da sessão e não foram mexidos; a imagem ainda mostra as camadas antigas. O README ainda cita só o teste com PrusaSlicer 2.7 e chama 30° a 40° de limite seguro, valor sem medição por trás.
@@ -62,6 +63,6 @@ No Benchy, os controles deram 4 pontos fora de 85.474 no G-code plano e 32,75% f
 ### Pendências, nesta ordem
 1. Usuário medir a folga do cabeçote: com a impressora fria e Z em 10 mm, medir da mesa até a parte mais baixa sem contar o bico e subtrair 10. Se der entre 5 e 7 mm, medir também as distâncias horizontais até o bico.
 2. Usuário informar `max_z_velocity` do `printer.cfg`.
-3. Implementar a checagem de colisão no `retransformar` com o perfil desse cabeçote, e aviso de velocidade do Z.
+3. ~~Implementar a checagem de colisão no `retransformar` e aviso de velocidade do Z~~: feito (PR da etapa 2). Falta só usar a folga medida como `--folga`.
 4. Primeira impressão real: funil a 15°, velocidade a 50%, acompanhando de perto, sobretudo a partir de 8 mm, onde o funil abre.
 5. Depois do teste: atualizar o README, substituir a imagem do corte (com aprovação do usuário) e fazer o commit.

@@ -5,6 +5,7 @@ import { parseArgs } from "node:util";
 import { lerStl, escreverStl } from "./stl.ts";
 import { deformarMalha, type Mapeamento } from "./conico.ts";
 import { retransformarGcode } from "./gcode.ts";
+import { CABECOTE_PADRAO } from "./colisao.ts";
 
 const AJUDA = `naoplanar: fatiamento cônico (não planar) para impressoras de 3 eixos
 
@@ -30,6 +31,17 @@ Opções de retransformar:
   --segmento comprimento máximo de cada segmento em mm (padrão 1)
   --fator-e  multiplicador de extrusão (padrão 1)
   --saida    arquivo de saída
+
+Checagem de colisão (feita no retransformar; se houver colisão, nada é gravado):
+  --folga        altura livre, em mm, entre a ponta do bico e a parte mais baixa do
+                 cabeçote (padrão 5). Meça na sua impressora: veja o README.
+  --raio-cabeca  até quantos mm do bico o cabeçote se estende na horizontal (padrão 30)
+  --raio-bico    raio em volta da ponta que é ignorado, onde o bico alisa o material
+                 vizinho (padrão 1,5)
+  --ignorar-colisao     grava o arquivo mesmo com colisão (por sua conta e risco)
+  --sem-checar-colisao  não faz a checagem
+  --z-max        velocidade máxima do eixo Z no firmware, em mm/s (max_z_velocity).
+                 Avisa quando o firmware vai desacelerar a impressão.
 `;
 
 interface ArquivoParametros {
@@ -65,6 +77,8 @@ function principal(argv: string[]): void {
       angulo: { type: "string" }, base: { type: "string" }, aresta: { type: "string" },
       centro: { type: "string" }, saida: { type: "string" }, params: { type: "string" },
       segmento: { type: "string" }, "fator-e": { type: "string" }, ajuda: { type: "boolean", short: "h" },
+      folga: { type: "string" }, "raio-cabeca": { type: "string" }, "raio-bico": { type: "string" },
+      "z-max": { type: "string" }, "ignorar-colisao": { type: "boolean" }, "sem-checar-colisao": { type: "boolean" },
     },
   });
   const [comando, arquivo] = positionals;
@@ -108,12 +122,32 @@ function principal(argv: string[]): void {
       centro: lerPar(o.centro),
       segmento: numero(o.segmento, "segmento", 1),
       fatorExtrusao: numero(o["fator-e"], "fator-e", 1),
+      cabecote: o["sem-checar-colisao"] ? null : {
+        folga: numero(o.folga, "folga", CABECOTE_PADRAO.folga),
+        raioCabeca: numero(o["raio-cabeca"], "raio-cabeca", CABECOTE_PADRAO.raioCabeca),
+        raioBico: numero(o["raio-bico"], "raio-bico", CABECOTE_PADRAO.raioBico),
+      },
+      zMaximo: o["z-max"] === undefined ? undefined : numero(o["z-max"], "z-max"),
     });
+    const c = r.colisao;
+    if (c && c.colisoes > 0) {
+      const p = c.primeira!, pior = c.pior!;
+      const msg =
+        `O cabeçote bateria na peça em ${c.colisoes} pontos. ` +
+        `A primeira colisão é em X${p.x.toFixed(1)} Y${p.y.toFixed(1)} Z${p.z.toFixed(1)}, com material ${p.invasao.toFixed(1)} mm ` +
+        `acima da parte mais baixa do cabeçote, a ${p.distancia.toFixed(1)} mm do bico (a pior passa ${pior.invasao.toFixed(1)} mm). ` +
+        `Este arquivo precisa de pelo menos ${c.folgaNecessaria.toFixed(1)} mm de folga, e a configurada é ` +
+        `${numero(o.folga, "folga", CABECOTE_PADRAO.folga)} mm. Diminua o --angulo no passo deformar, ` +
+        `ou informe a folga real do seu cabeçote com --folga.`;
+      if (!o["ignorar-colisao"]) throw new Error(msg + " Nada foi gravado. Use --ignorar-colisao para gravar mesmo assim.");
+      console.warn(`Aviso: ${msg}`);
+    }
     const saida = o.saida ?? arquivo;
     writeFileSync(saida, r.gcode);
     console.log(`G-code não planar: ${saida}`);
     console.log(`Centro do cone na mesa: X${r.centro[0].toFixed(2)} Y${r.centro[1].toFixed(2)}`);
     console.log(`${r.linhasTransformadas} movimentos viraram ${r.segmentosGerados} segmentos; Z de ${r.zMinimo.toFixed(2)} a ${r.zMaximo.toFixed(2)} mm`);
+    if (c) console.log(`Folga necessária no cabeçote: ${c.folgaNecessaria.toFixed(1)} mm${c.colisoes ? "" : " (sem colisões)"}`);
     for (const a of r.avisos) console.warn(`Aviso: ${a}`);
     return;
   }

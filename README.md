@@ -39,11 +39,31 @@ Também dá para usar como script de pós-processamento do OrcaSlicer (sem `--sa
 node /caminho/naoplanar/src/cli.ts retransformar --params /caminho/peca.naoplanar.json
 ```
 
+## Checagem de colisão
+
+Com camadas cônicas, o material do lado de dentro da camada fica mais alto que a ponta do bico. Se ele passar da parte mais baixa do cabeçote (bloco aquecedor, carcaça, duto de ventilação), o cabeçote bate na peça. O `retransformar` simula a impressão inteira com um mapa de alturas e, se houver colisão, **não grava o arquivo** e diz onde ela aconteceria e de quanta folga o arquivo precisa.
+
+A folga depende do seu cabeçote, então meça antes de imprimir:
+
+1. Com a impressora fria, leve o Z para 10 mm.
+2. Meça da mesa até a parte mais baixa do cabeçote, sem contar o bico.
+3. Subtraia 10. O resultado é a `--folga`.
+
+```sh
+node src/cli.ts retransformar peca.gcode --params peca.naoplanar.json --folga 7 --z-max 5
+```
+
+Sem `--folga`, o padrão é 5 mm. A checagem considera o cabeçote até 30 mm do bico (`--raio-cabeca`) e ignora o material a menos de 1,5 mm da ponta (`--raio-bico`), onde o bico alisa a linha vizinha.
+
+Referência, com o funil de exemplo e `--base 1`: a 15° ele precisa de 5,8 mm de folga, e a 30° precisa de 9,8 mm. Como regra geral, a folga necessária cresce com `largura da peça × tan(θ)`.
+
+`--z-max` recebe o `max_z_velocity` do firmware e avisa quando o firmware vai desacelerar a impressão porque o Z não acompanha.
+
 Testes: `npm test`. Exemplo completo: `npm run funil`, e depois os comandos acima com `exemplos/funil.stl`.
 
 ## Limitações conhecidas
 
-- **Colisão:** o bico precisa caber no ângulo. Use θ menor que o ângulo do cone do bico/hotend (em geral 30° a 40° é o limite seguro). Ainda não há verificação automática.
+- **Colisão:** a checagem usa um modelo simples do cabeçote (um cilindro fino para o bico e um plano para o resto). Ela não conhece o formato exato do seu cabeçote, então um duto que desce mais de um lado precisa ser medido pelo lado mais baixo.
 - **Topos planos ficam em degraus**, porque para a malha deformada eles viram superfícies inclinadas. O próximo modo (camadas de topo que seguem a superfície) resolve isso.
 - **Deslocamentos longos sobem e descem** junto com o cone. Não colidem com o que já foi impresso, mas são mais lentos.
 - A espessura real da camada, medida perpendicular ao cone, é `altura × cos(θ)`. A extrusão só é compensada na zona de transição da base; esse efeito do cone ainda não é compensado (`--fator-e` existe para testes manuais).
