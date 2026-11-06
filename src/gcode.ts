@@ -5,6 +5,7 @@
 // linha reta, os movimentos são quebrados em segmentos curtos.
 
 import { espessuraRelativa, paraReal, type Mapeamento } from "./conico.ts";
+import { checarColisao, checarVelocidadeZ, CABECOTE_PADRAO, type Cabecote, type PontoTrajeto, type RelatorioColisao, type RelatorioVelocidadeZ } from "./colisao.ts";
 
 // Altura mínima dos deslocamentos sem extrusão, para o bico não raspar a mesa.
 const Z_MINIMO_DESLOCAMENTO = 0.2;
@@ -20,6 +21,10 @@ export interface ParametrosRetransformacao {
   segmento?: number;
   /** Multiplicador de extrusão (1 = sem compensação). */
   fatorExtrusao?: number;
+  /** Geometria do cabeçote para a checagem de colisão. `null` desliga a checagem. */
+  cabecote?: Cabecote | null;
+  /** Velocidade máxima do eixo Z no firmware, em mm/s (max_z_velocity no Klipper). */
+  zMaximo?: number;
 }
 
 export interface RelatorioRetransformacao {
@@ -30,6 +35,9 @@ export interface RelatorioRetransformacao {
   zMinimo: number;
   zMaximo: number;
   avisos: string[];
+  /** Resultado da checagem de colisão, ou null se ela foi desligada. */
+  colisao: RelatorioColisao | null;
+  velocidadeZ: RelatorioVelocidadeZ | null;
 }
 
 // Tipos de trecho que não pertencem à peça e não entram no cálculo do centro.
@@ -143,6 +151,10 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
   let zMin = Infinity, zMax = -Infinity, transformadas = 0, segmentos = 0;
   let extrusoesAbaixoDaMesa = 0, deslocamentosElevados = 0, semCompensacao = 0;
   const saida: string[] = [];
+  const trajeto: PontoTrajeto[] = [];
+  const segmentosZ: { dxy: number; dz: number; f: number }[] = [];
+  let fAtual = 0;
+  let anterior: { x: number; y: number; z: number } | null = null;
   const inicioDoFinal = encontrarInicioDoFinal(linhas);
 
   for (const [indice, bruta] of linhas.entries()) {
@@ -168,6 +180,7 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
     }
 
     const ehMovimento = codigo === "G0" || codigo === "G1";
+    if (ehMovimento && p.F !== undefined) fAtual = p.F;
     if (ativo && (codigo === "G2" || codigo === "G3"))
       throw new Error("O G-code tem arcos (G2/G3). Desative \"Arc fitting\" no fatiador e exporte de novo.");
     if (ativo && ehMovimento && !absoluto)
@@ -190,6 +203,8 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
         if (p.E !== undefined) e = eRelativo ? e + p.E : p.E;
       }
       saida.push(bruta);
+      // Um movimento de eixo copiado sem transformar deixa o bico numa posição real desconhecida aqui.
+      if (ehMovimento && (p.X !== undefined || p.Y !== undefined || p.Z !== undefined)) anterior = null;
       continue;
     }
 
@@ -209,6 +224,10 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
       zr = Math.max(zr, 0);
       if (zr < zMin) zMin = zr;
       if (zr > zMax) zMax = zr;
+      trajeto.push({ x: sx, y: sy, z: zr, extrudindo });
+      if (anterior)
+        segmentosZ.push({ dxy: Math.hypot(sx - anterior.x, sy - anterior.y), dz: zr - anterior.z, f: fAtual });
+      anterior = { x: sx, y: sy, z: zr };
       let linha = `G1 X${fmt(sx, 3)} Y${fmt(sy, 3)} Z${fmt(zr, 3)}`;
       if (p.E !== undefined) {
         // Avalia a espessura no meio do segmento, para compensar o afinamento na transição.
@@ -239,6 +258,14 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
     avisos.push(`${deslocamentosElevados} pontos de deslocamento foram elevados a Z=${Z_MINIMO_DESLOCAMENTO} para o bico não raspar a mesa.`);
   if (semCompensacao > 0)
     avisos.push("A extrusão não foi compensada na zona de transição, onde as camadas ficam mais finas ou mais grossas. Ative \"Use relative E distances\" no fatiador.");
+  const cabecote = params.cabecote === undefined ? CABECOTE_PADRAO : params.cabecote;
+  const colisao = cabecote ? checarColisao(trajeto, cabecote) : null;
+  const velocidadeZ = params.zMaximo ? checarVelocidadeZ(segmentosZ, params.zMaximo) : null;
+  if (velocidadeZ && velocidadeZ.segmentosLimitados > 0)
+    avisos.push(
+      `${(velocidadeZ.fracaoDoTrajeto * 100).toFixed(0)}% do trajeto pede mais que ${params.zMaximo} mm/s no eixo Z ` +
+      `(até ${velocidadeZ.maiorVelocidadeZ.toFixed(1)} mm/s). O firmware vai desacelerar esses trechos e a impressão fica mais lenta.`,
+    );
   if (transformadas === 0) avisos.push("Nenhum movimento foi transformado. O G-code tem marcadores ;LAYER_CHANGE?");
 
   return {
@@ -249,5 +276,7 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
     zMinimo: zMin,
     zMaximo: zMax,
     avisos,
+    colisao,
+    velocidadeZ,
   };
 }
