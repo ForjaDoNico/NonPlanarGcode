@@ -7,7 +7,8 @@ Projeto open source de fatiamento não planar (camadas cônicas) para impressora
 2. O usuário fatia a malha deformada no OrcaSlicer (camadas planas).
 3. `src/gcode.ts`: desfaz a deformação no G-code, quebrando cada movimento em segmentos de até 1 mm.
 - `src/colisao.ts`: checagem de colisão do cabeçote (mapa de alturas) e aviso de velocidade do Z, chamada pelo `retransformar`.
-- `src/cli.ts`: comandos `deformar` e `retransformar`. `src/stl.ts`: leitura e escrita de STL.
+- `src/config.ts`: perfil da impressora (`~/.naoplanar/perfil.json`) e registro das peças deformadas (`~/.naoplanar/pecas/<nome>.json`). O `retransformar` sem `--params` acha a peça pelo nome `<nome>.naoplanar` no G-code, o que permite usá-lo como script de pós-processamento do OrcaSlicer. Pasta sobreposta por `NAOPLANAR_DIR` (usado nos testes).
+- `src/cli.ts`: comandos `deformar`, `retransformar` e `perfil`. `src/stl.ts`: leitura e escrita de STL.
 - `ferramentas/`: gerador do modelo de teste (funil) e verificador que gera um corte lateral em SVG.
 
 ## Convenções

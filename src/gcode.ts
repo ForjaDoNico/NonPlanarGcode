@@ -7,6 +7,13 @@
 import { espessuraRelativa, paraReal, type Mapeamento } from "./conico.ts";
 import { checarColisao, checarVelocidadeZ, CABECOTE_PADRAO, type Cabecote, type PontoTrajeto, type RelatorioColisao, type RelatorioVelocidadeZ } from "./colisao.ts";
 
+/** Comentário gravado no G-code transformado, para nunca transformar o mesmo arquivo duas vezes. */
+export const MARCADOR_TRANSFORMADO = "; naoplanar: G-code ja transformado";
+
+export function jaTransformado(gcode: string): boolean {
+  return gcode.includes(MARCADOR_TRANSFORMADO);
+}
+
 // Altura mínima dos deslocamentos sem extrusão, para o bico não raspar a mesa.
 const Z_MINIMO_DESLOCAMENTO = 0.2;
 
@@ -157,8 +164,13 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
   let anterior: { x: number; y: number; z: number } | null = null;
   const inicioDoFinal = encontrarInicioDoFinal(linhas);
 
+  if (jaTransformado(texto)) throw new Error("Este G-code já foi transformado pelo naoplanar.");
+  let marcou = false;
   for (const [indice, bruta] of linhas.entries()) {
-    if (indice < inicioDoFinal && ehMudancaDeCamada(bruta)) ativo = true;
+    if (indice < inicioDoFinal && ehMudancaDeCamada(bruta)) {
+      ativo = true;
+      if (!marcou) { saida.push(MARCADOR_TRANSFORMADO); marcou = true; }
+    }
     if (indice === inicioDoFinal) ativo = false;
 
     const [cmdBruto, ...resto] = bruta.split(";");
