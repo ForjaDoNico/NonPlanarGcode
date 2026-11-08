@@ -1,0 +1,14 @@
+{
+  "versao": 1,
+  "anguloGraus": 8,
+  "deslocamentoZ": 0,
+  "centroRelativo": [
+    0,
+    0
+  ],
+  "mapa": {
+    "tan": 0.14054083470239145,
+    "base": 1,
+    "transicao": 4.21622515349181
+  }
+}

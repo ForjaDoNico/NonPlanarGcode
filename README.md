@@ -1,126 +1,155 @@
 # naoplanar
 
-Fatiamento **não planar** (camadas cônicas) para impressoras 3D comuns de 3 eixos, em português, para macOS, Linux e Windows. Funciona junto com o fatiador que você já usa (OrcaSlicer ou PrusaSlicer): o naoplanar deforma o modelo antes e desfaz a deformação no G-code depois.
+**Non-planar** slicing for ordinary 3-axis 3D printers, on macOS, Linux and Windows. It works together with the slicer you already use (OrcaSlicer or PrusaSlicer): naoplanar deforms the model before slicing and undoes the deformation in the G-code afterwards, so each flat layer becomes a curved surface in the real part.
 
-> Status: protótipo da etapa 1. Testado de ponta a ponta com o PrusaSlicer 2.7 em um modelo de teste. Ainda **não foi testado numa impressora de verdade**.
+The interface is available in English and Portuguese. The command-line tool and the code are in Portuguese (*naoplanar* means "non-planar").
 
-## Como funciona
+> Status: work in progress. Tested end to end with OrcaSlicer 2.5 and PrusaSlicer 2.7 on test models. The first real prints on an Ender-3 V3 SE hit the part-cooling duct (at 15°, and again at 8°), so the collision model is still being calibrated. **Watch your first prints closely.**
 
-1. `deformar`: cada ponto do modelo sobe `r·tan(θ)`, onde `r` é a distância até o eixo do cone.
-2. Você fatia a malha deformada no seu fatiador, normalmente, com camadas planas.
-3. `retransformar`: no G-code, cada movimento é quebrado em segmentos de até 1 mm e desce `r·tan(θ)`. Cada camada plana vira um cone na peça real.
+## How it works
 
-Com θ positivo as camadas descem para fora, então balanços que abrem para fora (funil, cogumelo, beiral) passam a ser impressos sem suporte. Com θ negativo, as camadas sobem para fora.
+1. **Deform:** every point of the model is raised by a surface height `H(x, y)`. For a cone, `H = r·tan(θ)`, where `r` is the distance to the cone axis.
+2. **Slice:** the deformed mesh is sliced normally, with flat layers.
+3. **Transform back:** in the G-code, each move is split into segments of at most 1 mm and lowered by `H(x, y)`. Each flat layer becomes a copy of the surface in the real part.
 
-A opção `--base` mantém as primeiras camadas planas para a peça grudar na mesa e faz uma transição suave até o cone completo. Use-a sempre com θ positivo: sem ela, as camadas encostam na mesa em ângulo e o bico pode raspar nela. Na transição, o ângulo cresce aos poucos e as camadas ficam mais finas (até a metade da altura configurada, na borda da peça) com θ positivo, ou mais grossas com θ negativo. A extrusão é ajustada para compensar, desde que **Use relative E distances** esteja ativo.
+With a positive angle the layers slope down outwards, so overhangs that open outwards (funnels, mushrooms, eaves) print without support. With a negative angle the layers slope up outwards.
 
-![Corte lateral do G-code final](exemplos/corte-funil.png)
+The `--base` option keeps the first layers flat so the part sticks to the bed, with a smooth transition to the full surface. Always use it with a positive angle: without it, the layers meet the bed at an angle and the nozzle can scrape it. In the transition the layers get thinner (down to half the configured height at the edge of the part) with a positive angle, or thicker with a negative one. Extrusion is compensated, as long as **Use relative E distances** is enabled.
 
-O corte acima é do modelo de teste (`exemplos/funil.stl`): uma haste com um funil a 50° da vertical, que no fatiamento plano precisaria de suporte. A imagem foi gerada antes da correção da transição e ainda mostra a inclinação antiga, de cerca de 4° a 13° na parede. Com `--angulo 30 --base 1`, a inclinação agora vai de 11° no início da parede a 30° a partir de cerca de 18 mm de altura.
+![Side cut of the final G-code](exemplos/corte-funil.png)
 
-## Uso
+The cut above is from the test model (`exemplos/funil.stl`): a stem with a funnel at 50° from vertical, which would need support with flat slicing. The image predates a fix in the transition and still shows the old slope, about 4° to 13° on the wall. With `--angulo 30 --base 1` the slope now goes from 11° at the start of the wall to 30° from about 18 mm up.
 
-Requer Node.js 22.18 ou mais novo (roda TypeScript direto, sem compilar).
+## Interface
 
 ```sh
-node src/cli.ts deformar peca.stl --angulo 30 --base 1
-# fatie peca.naoplanar.stl no OrcaSlicer e exporte o G-code
-node src/cli.ts retransformar peca.gcode --saida peca.final.gcode
+npm run interface
 ```
 
-No fatiador:
-- desative **Arc fitting** (arcos G2/G3 não são suportados);
-- ative **Use relative E distances** (recomendado);
-- pode posicionar a peça onde quiser na mesa, mas não gire: o centro do cone é detectado no G-code.
+The page opens in your browser (a local address, only on your computer). Pick the language in the top right corner. Then:
 
-### Retransformar automático no OrcaSlicer
+1. drop the part STL;
+2. drop a G-code or 3MF you already exported from OrcaSlicer: the printer, process and filament settings are taken from it and saved for next time. Arc fitting, relative E and object labels are adjusted automatically;
+3. choose the layers: a flat base and one or more anchors, each with a shape (cone, pyramid, wedge, tilted plane, dome), an angle and a height. The side cut shows the layers inside the part as you edit;
+4. set up the print head (clearance, safety margin and, optionally, the STL of the fan duct);
+5. click **Generate G-code**. naoplanar deforms the part, slices it with OrcaSlicer from the command line, undoes the deformation, checks for collisions and shows the toolpath in 3D. If a collision is expected, the download is held back.
 
-Configure uma vez e o passo 3 acontece sozinho sempre que você exportar ou enviar o G-code:
+Requires OrcaSlicer installed in `/Applications` (or its path in the `NAOPLANAR_ORCA` environment variable). The settings and print head profile are stored in `~/.naoplanar`.
 
-1. No Terminal, descubra onde está o Node com `which node` (no Mac costuma ser `/opt/homebrew/bin/node` ou `/usr/local/bin/node`).
-2. No OrcaSlicer, em **Processo > Outros > Scripts de pós-processamento** (Post-processing Scripts), coloque uma linha com o caminho do Node, o caminho do `cli.ts` e a palavra `retransformar`:
+### Anchors and shapes
+
+Every layer is the same surface shifted vertically, so neighbouring layers never cross. With more than one anchor the surface changes with height: between two anchors the *heights* of the two surfaces are blended, not the angles, because blending angles layer by layer makes neighbouring layers intersect. The interface rejects blends that are too abrupt, where the real layers would be thinner than half or thicker than twice the configured height.
+
+| Shape | Height `H` |
+|---|---|
+| Cone | `r·tan θ` |
+| Pyramid | `max(|u|, |v|)·tan θ` |
+| Wedge | `|u|·tan θ` (fold along a line) |
+| Tilted | `u·tan θ` (tilted plane) |
+| Dome | sphere up to the part radius, then a tangent cone |
+
+`(u, v)` are the coordinates rotated by the anchor's direction. No shape is steeper than the cone with the same angle.
+
+## Command line
+
+Requires Node.js 22.18 or newer (TypeScript runs directly, with no build step and no dependencies).
+
+```sh
+node src/cli.ts deformar part.stl --angulo 30 --base 1
+# slice part.naoplanar.stl in OrcaSlicer and export the G-code
+node src/cli.ts retransformar part.gcode --saida part.final.gcode
+```
+
+In the slicer:
+- disable **Arc fitting** (G2/G3 arcs are not supported);
+- enable **Use relative E distances** (recommended);
+- you can place the part anywhere on the bed, but do not rotate it: the cone centre is detected from the G-code.
+
+### Automatic transform in OrcaSlicer
+
+Set this up once and step 3 happens automatically whenever you export or send the G-code:
+
+1. In the Terminal, find Node with `which node` (on a Mac usually `/opt/homebrew/bin/node` or `/usr/local/bin/node`).
+2. In OrcaSlicer, under **Process > Others > Post-processing Scripts**, add a line with the Node path, the path to `cli.ts` and the word `retransformar`:
 
    ```
-   /opt/homebrew/bin/node /Users/voce/NonPlanarGcode/src/cli.ts retransformar
+   /opt/homebrew/bin/node /Users/you/naoplanar/src/cli.ts retransformar
    ```
 
-3. Deixe **Label objects** ligado (Processo > Outros). É pelo nome da peça no G-code que o naoplanar sabe quais parâmetros usar.
-4. Salve o processo. Pode deixar o script sempre ligado:
-   - peças comuns passam sem nenhuma mudança;
-   - peças `*.naoplanar.stl` são transformadas com os parâmetros que o `deformar` registrou em `~/.naoplanar/pecas/`;
-   - um arquivo já transformado nunca é transformado de novo;
-   - se houver colisão, o Orca mostra o erro e não exporta.
+3. Keep **Label objects** enabled (Process > Others). naoplanar finds the right parameters by the object name in the G-code.
+4. Save the process. The script can stay enabled all the time:
+   - ordinary parts pass through unchanged;
+   - `*.naoplanar.stl` parts are transformed with the parameters that `deformar` stored in `~/.naoplanar/pecas/`;
+   - a file that was already transformed is never transformed again;
+   - if a collision is found, Orca shows the error and does not export.
 
-Não renomeie a peça dentro do Orca: o nome precisa continuar terminando em `.naoplanar`.
+Do not rename the part inside Orca: its name must keep ending in `.naoplanar`.
 
-### Perfil da impressora
+### Printer profile
 
-Os ajustes da impressora ficam salvos em `~/.naoplanar/perfil.json` e valem para todo `retransformar`, inclusive o automático:
-
-```sh
-node src/cli.ts perfil --folga 7 --z-max 5   # salva
-node src/cli.ts perfil                       # mostra
-```
-
-Opções passadas direto no `retransformar` valem só naquela execução.
-
-## Topo liso
-
-Com camadas cônicas, um topo plano (ou qualquer topo que não tenha o formato do cone) sai em degraus da altura de uma camada. Com `--topo-liso` no `deformar`, a última camada de topo sobe até a superfície real da peça, e a extrusão aumenta na mesma proporção para preencher a camada mais grossa. Os deslocamentos sobre o topo passam por cima dele.
+Printer settings are saved in `~/.naoplanar/perfil.json` and apply to every `retransformar`, including the automatic one:
 
 ```sh
-node src/cli.ts deformar peca.stl --angulo 15 --base 1 --topo-liso
+node src/cli.ts perfil --folga 7 --z-max 5   # save
+node src/cli.ts perfil                       # show
 ```
 
-O `retransformar` lê o STL original para conhecer a superfície, então não mova nem apague esse arquivo. Ele também lê a altura de camada que o fatiador grava no G-code. Funciona com os tipos "Top surface" (OrcaSlicer), "Top solid infill" (PrusaSlicer) e "Ironing". `--sem-topo-liso` desliga o modo numa execução.
+Options passed directly to `retransformar` apply to that run only.
 
-No funil de exemplo a 15°, a última camada do topo variava 0,15 mm de altura e passou a ficar toda a 28,00 mm. A extrusão do topo aumentou 22%.
+## Smooth top
 
-## Checagem de colisão
-
-Com camadas cônicas, o material do lado de dentro da camada fica mais alto que a ponta do bico. Se ele passar da parte mais baixa do cabeçote (bloco aquecedor, carcaça, duto de ventilação), o cabeçote bate na peça. O `retransformar` simula a impressão inteira com um mapa de alturas e, se houver colisão, **não grava o arquivo** e diz onde ela aconteceria e de quanta folga o arquivo precisa.
-
-A folga depende do seu cabeçote, então meça antes de imprimir:
-
-1. Com a impressora fria, leve o Z para 10 mm.
-2. Meça da mesa até a parte mais baixa do cabeçote, sem contar o bico.
-3. Subtraia 10. O resultado é a `--folga`.
-
-Salve o valor no perfil (`node src/cli.ts perfil --folga 7`). Sem perfil, o padrão é 5 mm. A checagem considera o cabeçote até 30 mm do bico (`--raio-cabeca`) e ignora o material a menos de 1,5 mm da ponta (`--raio-bico`), onde o bico alisa a linha vizinha.
-
-Referência, com o funil de exemplo e `--base 1`: a 15° ele precisa de 5,8 mm de folga, e a 30° precisa de 9,8 mm. Como regra geral, a folga necessária cresce com `largura da peça × tan(θ)`.
-
-### Formato real do cabeçote
-
-O modelo padrão trata o cabeçote como um disco plano em volta do bico. Se uma parte baixa do cabeçote tem formato irregular (por exemplo, um duto de fan com saídas só dos lados), dá para usar o STL dela:
+With non-planar layers, a flat top (or any top that does not follow the layer surface) comes out stepped, one layer high. With `--topo-liso` on `deformar`, the last top layer is raised to the real surface of the part and extrusion grows in the same proportion to fill the thicker layer. Travel moves over the top pass above it.
 
 ```sh
-node src/cli.ts perfil --cabecote-stl duto.stl --bico 10.9,6.2,-27.65 --folga 8
+node src/cli.ts deformar part.stl --angulo 15 --base 1 --topo-liso
 ```
 
-- O STL precisa estar com Z para cima, na orientação em que está montado.
-- `--bico` é a posição da ponta do bico nas coordenadas desse STL: no centro entre as saídas, abaixo da parte mais baixa do duto pela folga medida.
-- `--folga` passa a valer para o resto do cabeçote (bloco aquecedor, carcaça), e em cada ponto vale a menor das duas.
+`retransformar` reads the original STL to know the surface, so do not move or delete it. It also reads the layer height that the slicer writes in the G-code. Works with the "Top surface" (OrcaSlicer), "Top solid infill" (PrusaSlicer) and "Ironing" types. `--sem-topo-liso` turns it off for one run.
 
-Com o duto 5015 da Ender-3 V3 SE do autor, o funil passou de 9° no modelo de disco para 14° sem colisão. A 15°, a primeira colisão prevista foi em Z 17,6 mm, e na impressão real o fan encostou em Z 17,67 mm.
+On the example funnel at 15°, the last top layer varied by 0.15 mm in height and now sits entirely at 28.00 mm. Top extrusion grew by 22%.
 
-`--z-max` recebe o `max_z_velocity` do firmware e avisa quando o firmware vai desacelerar a impressão porque o Z não acompanha.
+## Collision check
 
-Testes: `npm test`. Exemplo completo: `npm run funil`, e depois os comandos acima com `exemplos/funil.stl`.
+With non-planar layers, material on the inner side of the layer sits higher than the nozzle tip. If it rises above the lowest part of the print head (heater block, shroud, fan duct), the head hits the part. `retransformar` simulates the whole print with a height map and, if a collision is found, **does not write the file** and reports where it would happen and how much clearance the file needs.
 
-## Limitações conhecidas
+Clearance depends on your print head, so measure it before printing:
 
-- **Colisão:** a checagem usa um modelo simples do cabeçote (um cilindro fino para o bico e um plano para o resto). Ela não conhece o formato exato do seu cabeçote, então um duto que desce mais de um lado precisa ser medido pelo lado mais baixo.
-- **Topos ficam em degraus** sem `--topo-liso`. Com ele, só a última camada sobe até a superfície, então a camada de baixo ainda tem degraus, que ficam escondidos.
-- **Deslocamentos longos sobem e descem** junto com o cone. Não colidem com o que já foi impresso, mas são mais lentos.
-- A camada cônica é mais fina na perpendicular (`altura × cos θ`), mas o volume entre duas camadas é o mesmo das camadas planas, então a extrusão do fatiador já está certa. Só a zona de transição da base precisa de compensação, e ela é feita (`--fator-e` existe para testes manuais).
-- **Saia e brim sem `--base`:** com θ positivo, o trecho fora da peça ficaria abaixo da mesa, e o `retransformar` recusa o G-code com um erro.
-- Um eixo de cone por peça. Várias peças na mesa ainda não são suportadas.
+1. With the printer cold, move Z to 10 mm.
+2. Measure from the bed to the lowest part of the print head, not counting the nozzle.
+3. Subtract 10. The result is `--folga` (clearance).
 
-## Comparação com o Boxily (Boxislicer)
+Save it in the profile (`node src/cli.ts perfil --folga 7`). Without a profile the default is 5 mm. The check covers the print head up to 30 mm from the nozzle (`--raio-cabeca`) and ignores material within 1.5 mm of the tip (`--raio-bico`), where the nozzle smooths the neighbouring line. `--margem` adds a safety margin: the head is treated as that much lower.
 
-O Boxily é um fatiador completo e próprio: fatia por superfícies cônicas ao longo de uma curva (spline) e suporta 5 eixos. Só existe para Windows, e a documentação não diz se é open source. O naoplanar é mais simples de propósito: foca em impressoras de 3 eixos, reaproveita o OrcaSlicer para todo o resto (perímetros, preenchimento, suporte, perfis) e é open source desde o início.
+Reference, with the example funnel and `--base 1`: at 15° it needs 5.8 mm of clearance, and at 30° it needs 9.8 mm. As a rule of thumb, the required clearance grows with `part width × tan(θ)`.
 
-## Licença
+### Real print head shape
+
+The default model treats the print head as a flat disc around the nozzle. If a low part of the head has an irregular shape (for example, a fan duct with outlets only on the sides), you can use its STL:
+
+```sh
+node src/cli.ts perfil --cabecote-stl duct.stl --bico 10.9,6.2,-27.65 --folga 8
+```
+
+- The STL must be Z up, oriented as mounted.
+- `--bico` is the position of the nozzle tip in that STL's coordinates: centred between the outlets, below the lowest part of the duct by the measured clearance.
+- `--folga` then applies to the rest of the print head (heater block, shroud), and at each point the smaller of the two wins.
+
+On the author's Ender-3 V3 SE, the 5015 duct touched a 15° funnel at Z 17.67 mm. Reproducing that contact required an effective clearance of about 3.85 mm under the duct, and the prediction is very sensitive: 0.3 mm less moves the first contact down to Z 17. An 8° funnel, which passed the check with a 1.5 mm margin, also hit during printing, so treat the shape-based check as a guide, not a guarantee.
+
+`--z-max` takes the firmware's `max_z_velocity` and warns when the firmware will slow the print down because Z cannot keep up.
+
+Tests: `npm test`. Full example: `npm run funil`, then the commands above with `exemplos/funil.stl`.
+
+## Known limitations
+
+- **Collision:** the check uses a simple model of the print head (a thin cylinder for the nozzle and a plane, or the duct STL, for the rest). It is calibrated from a single real contact so far.
+- **Tops are stepped** without `--topo-liso`. With it, only the last layer rises to the surface, so the layer below still has steps, which stay hidden.
+- **Long travel moves rise and fall** with the surface. They do not hit what was already printed, but they are slower.
+- A non-planar layer is thinner perpendicular to itself (`height × cos θ`), but the volume between two layers is the same as with flat layers, so the slicer's extrusion is already right. Only the base transition needs compensation, and it is applied (`--fator-e` exists for manual tests).
+- **Skirt and brim without `--base`:** with a positive angle, the part outside the object would be below the bed, and `retransformar` rejects the G-code with an error.
+- One surface axis per part. Several parts on the bed are not supported yet.
+- Surfaces follow a vertical axis only. Layers that follow a curved path through the part would need a printer that tilts the nozzle.
+
+## License
 
 MIT.

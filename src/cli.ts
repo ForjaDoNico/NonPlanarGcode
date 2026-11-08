@@ -3,7 +3,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { alturaDeCamada, criarMapaTopo } from "./topo.ts";
-import { folgaDoStl } from "./cabecote.ts";
+import { cabecoteDoPerfil } from "./processo.ts";
 import { parseArgs } from "node:util";
 import { lerStl, escreverStl } from "./stl.ts";
 import { deformarMalha, type Mapeamento } from "./conico.ts";
@@ -54,6 +54,8 @@ Estas opções sobrepõem o perfil salvo só nesta execução; no comando perfil
   --folga        altura livre, em mm, entre a ponta do bico e a parte mais baixa do
                  cabeçote (padrão 5). Meça na sua impressora: veja o README.
   --raio-cabeca  até quantos mm do bico o cabeçote se estende na horizontal (padrão 30)
+  --margem       margem de segurança em mm: a checagem trata o cabeçote como mais baixo
+                 (padrão 0, ou o valor salvo no perfil)
   --raio-bico    raio em volta da ponta que é ignorado, onde o bico alisa o material
                  vizinho (padrão 1,5)
   --ignorar-colisao     grava o arquivo mesmo com colisão (por sua conta e risco)
@@ -88,7 +90,7 @@ function principal(argv: string[]): void {
       centro: { type: "string" }, saida: { type: "string" }, params: { type: "string" },
       segmento: { type: "string" }, "fator-e": { type: "string" }, ajuda: { type: "boolean", short: "h" },
       folga: { type: "string" }, "raio-cabeca": { type: "string" }, "raio-bico": { type: "string" },
-      "z-max": { type: "string" }, "topo-liso": { type: "boolean" }, "cabecote-stl": { type: "string" }, bico: { type: "string" }, "sem-topo-liso": { type: "boolean" }, "ignorar-colisao": { type: "boolean" }, "sem-checar-colisao": { type: "boolean" },
+      "z-max": { type: "string" }, margem: { type: "string" }, "topo-liso": { type: "boolean" }, "cabecote-stl": { type: "string" }, bico: { type: "string" }, "sem-topo-liso": { type: "boolean" }, "ignorar-colisao": { type: "boolean" }, "sem-checar-colisao": { type: "boolean" },
     },
   });
   const [comando, arquivo] = positionals;
@@ -99,6 +101,7 @@ function principal(argv: string[]): void {
     if (o.folga !== undefined) mudancas.folga = numero(o.folga, "folga");
     if (o["raio-cabeca"] !== undefined) mudancas.raioCabeca = numero(o["raio-cabeca"], "raio-cabeca");
     if (o["raio-bico"] !== undefined) mudancas.raioBico = numero(o["raio-bico"], "raio-bico");
+    if (o.margem !== undefined) mudancas.margem = numero(o.margem, "margem");
     if (o["z-max"] !== undefined) mudancas.zMax = numero(o["z-max"], "z-max");
     if (o.segmento !== undefined) mudancas.segmento = numero(o.segmento, "segmento");
     if (o["cabecote-stl"] !== undefined) {
@@ -201,17 +204,18 @@ function principal(argv: string[]): void {
     const zMax = numero(o["z-max"], "z-max", perfil.zMax);
     const r = retransformarGcode(texto, {
       mapa: params.mapa,
+      superficie: params.superficie,
       deslocamentoZ: params.deslocamentoZ,
       centroRelativo: params.centroRelativo,
       centro: lerPar(o.centro),
       segmento: numero(o.segmento, "segmento", perfil.segmento),
       fatorExtrusao: numero(o["fator-e"], "fator-e", 1),
-      cabecote: o["sem-checar-colisao"] ? null : {
+      cabecote: o["sem-checar-colisao"] ? null : cabecoteDoPerfil({
+        ...perfil,
         folga,
         raioCabeca: numero(o["raio-cabeca"], "raio-cabeca", perfil.raioCabeca),
         raioBico: numero(o["raio-bico"], "raio-bico", perfil.raioBico),
-        formato: perfil.cabecoteStl && perfil.bico ? folgaDoStl(lerStl(perfil.cabecoteStl), perfil.bico) : undefined,
-      },
+      }, numero(o.margem, "margem", perfil.margem ?? 0)),
       zMaximo: zMax > 0 ? zMax : undefined,
       topo,
     });

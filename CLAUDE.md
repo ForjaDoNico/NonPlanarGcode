@@ -1,74 +1,72 @@
-# naoplanar: contexto para o Claude Code
+# naoplanar: context for Claude Code
 
-Projeto open source de fatiamento não planar (camadas cônicas) para impressoras 3D de 3 eixos, em português (PT-BR), com foco em macOS. Inspirado no Boxily (boxily.at), que só roda no Windows e tem problemas de tradução.
+Open source non-planar slicing for 3-axis 3D printers, focused on macOS. The interface is in English and Portuguese (PT-BR); the CLI, code, names, messages and comments are in Portuguese.
 
-## Como funciona
-1. `src/conico.ts`: deforma o STL (z' = z + r·tan θ, com base plana opcional) e tem o mapeamento inverso.
-2. O usuário fatia a malha deformada no OrcaSlicer (camadas planas).
-3. `src/gcode.ts`: desfaz a deformação no G-code, quebrando cada movimento em segmentos de até 1 mm.
-- `src/colisao.ts`: checagem de colisão do cabeçote (mapa de alturas) e aviso de velocidade do Z, chamada pelo `retransformar`.
-- `src/config.ts`: perfil da impressora (`~/.naoplanar/perfil.json`) e registro das peças deformadas (`~/.naoplanar/pecas/<nome>.json`). O `retransformar` sem `--params` acha a peça pelo nome `<nome>.naoplanar` no G-code, o que permite usá-lo como script de pós-processamento do OrcaSlicer. Pasta sobreposta por `NAOPLANAR_DIR` (usado nos testes).
-- `src/cabecote.ts`: formato real de parte do cabeçote a partir de um STL (`perfil --cabecote-stl --bico x,y,z`). Mapa da menor altura do cabeçote por ponto em volta do bico; a checagem usa min(folga geral, folga do formato) em cada vizinho.
-- `src/topo.ts`: modo de topo liso (`--topo-liso`). Mapa de alturas do STL original; no `retransformar`, pontos de topo a menos de uma camada da superfície sobem até ela, com extrusão proporcional, e deslocamentos perto do topo passam por cima.
-- `src/cli.ts`: comandos `deformar`, `retransformar` e `perfil`. `src/stl.ts`: leitura e escrita de STL.
-- `ferramentas/`: gerador do modelo de teste (funil) e verificador que gera um corte lateral em SVG.
+## How it works
+1. `src/conico.ts`: deforms the STL (z' = z + r·tan θ, with an optional flat base) and has the inverse mapping. `deformarComSuperficie` does the same with any surface from `superficie.ts`.
+2. The mesh is sliced flat by OrcaSlicer (through its GUI, or its CLI via `orca.ts`).
+3. `src/gcode.ts`: undoes the deformation in the G-code, splitting each move into segments of at most 1 mm.
+- `src/superficie.ts`: layer surfaces (cone, pyramid, wedge, tilted, dome) and anchors by height. Between anchors it blends the height H, never the angle (blending angles makes neighbouring layers cross). Validation keeps real layers between 0.5× and 2× the configured height. No Node imports: the web page imports the same file (the server strips types with `stripTypeScriptTypes`). Saved parameters version 2 (`superficie`); version 1 (`mapa`) still works.
+- `src/colisao.ts`: print head collision check (height map) and Z speed warning, called by `retransformar`.
+- `src/cabecote.ts`: real shape of part of the print head from an STL (`perfil --cabecote-stl --bico x,y,z`). Each neighbour uses min(general clearance, shape clearance). `processo.ts: cabecoteDoPerfil` applies the safety margin (`margem`) to both.
+- `src/topo.ts`: smooth top mode (`--topo-liso`).
+- `src/config.ts`: printer profile (`~/.naoplanar/perfil.json`) and registry of deformed parts (`~/.naoplanar/pecas/<name>.json`), which lets `retransformar` run as an OrcaSlicer post-processing script. Folder overridden by `NAOPLANAR_DIR` (used in tests).
+- `src/orca.ts`: reads the settings from a G-code (CONFIG_BLOCK, values kept as text) or a 3MF, builds a 3MF (own zip with zlib; vertices rounded to float32 and welded at 0.001 mm; the `OrcaSlicer` metadata line is required or Orca refuses the file) and slices with `OrcaSlicer --datadir <tmp> --slice 0`, run from a temp folder because Orca writes a log into the current directory. Forces arc fitting off, relative E and object labels.
+- `src/processo.ts`: STL → deform → 3MF → Orca → transform back → collision → preview. Progress steps and warnings are sent as codes so the interface can translate them.
+- `src/servidor.ts` + `interface/`: local page (`npm run interface`, port 8642, 127.0.0.1 only), no dependencies; own WebGL viewer and a side cut showing the layers. Texts in `interface/textos.js` (keys identical for `pt-BR` and `en`; language dropdown stored in localStorage).
+- `src/cli.ts`: commands `deformar`, `retransformar` and `perfil`. `src/stl.ts`: STL read/write.
+- `ferramentas/`: test model generator (funnel) and a checker that draws a side cut as SVG.
 
-## Convenções
-- TypeScript executado direto pelo Node 22.18+ (type stripping), sem build e sem dependências. Use só sintaxe apagável (sem enum, sem namespace).
-- Nomes, mensagens e comentários em português.
-- Testes: `npm test` (node:test).
+## Conventions
+- TypeScript run directly by Node 22.18+ (type stripping), no build and no dependencies. Erasable syntax only (no enum, no namespace).
+- Code names, CLI messages and comments in Portuguese. Documentation (README, this file) in English. Every interface text goes through `textos.js` in both languages.
+- Tests: `npm test` (node:test). The interface was checked with headless Chrome over the DevTools protocol (the Chrome extension was not connected).
 
-## Plano
-1. Pesquisa e protótipo de linha de comando: **feito**, testado com G-code real do OrcaSlicer, ainda sem teste em impressora real.
-2. Motor principal: checagem de colisão, perfil da impressora, script automático no OrcaSlicer e topo liso **feitos** (PRs #2 a #4). A compensação de cos θ não é necessária: o volume entre camadas cônicas é igual ao das planas.
-3. App para Mac em PT-BR (i18n desde o início) e integração como script de pós-processamento do OrcaSlicer.
-4. Lançamento open source: GitHub, licença MIT, instalador .dmg, documentação em PT-BR.
+## Plan
+1. Research and command-line prototype: **done**.
+2. Core: collision check, printer profile, automatic OrcaSlicer script and smooth top: **done** (PRs #2 to #5). No cos θ compensation is needed: the volume between non-planar layers equals that of flat ones.
+3. Interface: **done** on branch `etapa3/interface` (local page + Orca CLI + surfaces with anchors + EN/PT). Next: real print tests, .dmg app.
+4. Open source release: GitHub, MIT license, .dmg installer.
 
-## Limitações atuais
-Sem arcos G2/G3 (desativar Arc fitting), sem G91 dentro das camadas, um eixo de cone por peça, travels sobem e descem junto com o cone. A checagem de colisão modela o cabeçote como bico fino + plano a `--folga` mm, até `--raio-cabeca` mm.
+## Current limitations
+No G2/G3 arcs, no G91 inside layers, one surface axis per part (vertical only), travel moves rise and fall with the surface. The collision check models the head as a thin nozzle plus a plane at `--folga` mm (or the duct STL), up to `--raio-cabeca` mm.
 
-## Estado em 2026-11-06
-Nada desta sessão foi commitado: há mudanças em `src/`, `test/`, `README.md` e `exemplos/funil.naoplanar.json`, além de `CLAUDE.md` e `exemplos/funil15.naoplanar.json` sem rastreio. `corte-funil.png` e `corte-funil.svg` já tinham alterações antes da sessão e não foram mexidos; a imagem ainda mostra as camadas antigas. O README ainda cita só o teste com PrusaSlicer 2.7 e chama 30° a 40° de limite seguro, valor sem medição por trás.
+## Fixed behaviour (do not revert without a reason)
+- `fmt` only strips zeros after the decimal point. It used to turn `F1200` into `F12`.
+- Base transition: T = r·|tan| for θ > 0 and 2·r·|tan| for θ < 0, with r = real vertex radius. A shorter T thins the layer (down to half at the edge), so extrusion is compensated (relative E only).
+- The transformation ends at the first end-code marker after the last layer that is not followed by another feature type. `;TYPE:Custom` mid-print does not end anything.
+- Extrusion below the bed is an error. Travel below 0.2 mm is raised to 0.2 mm with a warning.
+- Moves are copied unchanged until X, Y and Z are known, because the nozzle is wherever the `PRINT_START` macro left it.
+- `deformar` warns when θ > 0 without `--base`.
 
-### Comportamento corrigido (não reverter sem motivo)
-- `fmt` só apaga zeros depois da vírgula. Antes, `F1200` virava `F12`.
-- Transição da base: T = r·|tan| para θ > 0 e 2·r·|tan| para θ < 0, com r = raio real dos vértices, não o canto da caixa. T mais curto aumenta o ângulo, mas afina a camada (até a metade na borda), por isso a extrusão é compensada por `espessuraRelativa`, só com E relativo.
-- O fim da transformação é o primeiro marcador de código final depois da última camada, sem outro tipo de trecho em seguida. `;TYPE:Custom` no meio da impressão não encerra mais nada.
-- Extrusão abaixo da mesa é erro. Deslocamento abaixo de 0,2 mm é elevado a 0,2 mm, com aviso (valor fixo; pode precisar de ajuste conforme a primeira camada).
-- Movimentos são copiados sem mudança até X, Y e Z serem conhecidos, porque o bico está onde a macro `PRINT_START` o deixou. Antes, o código assumia X0 Y0 Z0.
-- `deformar` avisa quando θ > 0 sem `--base`.
+## User's printer and profile
+Ender-3 V3 SE with Klipper, custom print head with a wide printed shroud and a side duct ("5015 selftap", side outlets with a 27 × 14 mm gap around the nozzle; STL in `~/Downloads/5015 selftap.stl`). OrcaSlicer 2.5: machine `Ender Klipper`, process `0.20mm Klipper RAPIDAO Cotrim`, filament `ABS Cotrim` (fan up to 80%). Z limited to 5 mm/s in the profile. G-code uses `PRINT_START`/`PRINT_END` macros and `EXCLUDE_OBJECT`. Source G-codes and 3MFs are in `~/Downloads`. The real `~/.naoplanar` profile has not been created yet.
 
-### Impressora e perfil do usuário
-Ender-3 V3 SE com Klipper, cabeçote personalizado com carcaça impressa larga e duto lateral. No OrcaSlicer 2.5.0-rc: máquina `Ender Klipper`, processo `0.20mm Klipper RAPIDAO Cotrim`, filamento `ABS Cotrim`. Arc fitting já desligado e E relativo já ligado. O perfil limita o Z a 5 mm/s e vai até 300 mm/s. O G-code usa macros `PRINT_START`/`PRINT_END` e `EXCLUDE_OBJECT`.
+## Duct calibration (2026-11-08)
+- First real print: 15° funnel, the duct touched at Z 17.67 mm.
+- With the nozzle at (10.9, 6.2, −27.65) in the duct STL, the current code predicts first contact at Z 21.8, not 17.6 as PR #5 and the old README claimed. Matching 17.67 needs the nozzle at Z −27.4 (effective clearance 3.85 mm). The prediction is very sensitive: 0.3 mm less moves first contact to Z 17.
+- With the calibrated nozzle, funnel margins to the duct: 14° collides (Z 23.6); 10° 1.1 mm; 9° 1.3 mm; 8° 1.5 mm; 7° 1.75 mm.
+- The 15° print went through 3.37 mm of material above the tip (30 mm radius) without the rest of the head touching.
+- **The 8° funnel (`exemplos/funil-8graus.final.gcode`, checked with nozzle Z −25.9 = calibrated + 1.5 mm, `--folga 3.4`) also collided in the real print.** The user has not said where (Z, which part, which side). Until then the duct model is not trustworthy. The user is considering removing the duct and printing ABS without the fan.
 
-### Fatiamento
-Fatiar sempre pela interface do OrcaSlicer, sem girar nem redimensionar a peça. O CLI falhou: os JSON de usuário herdam de perfis empacotados em `Resources/profiles/*.opc` ("Preset was not found in the loaded bundle"). Os G-codes de origem estão em `~/Downloads`, e o STL do Benchy em `~/Downloads/benchy.stl`.
+## Files in `exemplos/` (all with `--base 1`; `.gcode` files are not tracked)
+- `funil-8graus.final.gcode`: collided in the real print (see above).
+- `funil-15graus.final.gcode`: printed, hit the duct at Z 17.67.
+- `funil-30graus.final.gcode`: needs more than 12 mm of clearance.
+- `benchy-15graus.final.gcode`: correct shape. `benchy-15graus-SO-VISUALIZAR.gcode`: flat Benchy transformed without `deformar`, distorted. **Do not print.**
+- `colaquente-0graus.gcode` / `colaquente-25graus.gcode`: glue-gun snap clip (18 × 7 × 8 mm, two 4 mm split pins) from `~/Downloads/colaquente.3mf`, flat and 25° cone, same settings, for a break test. 25° passes the check with at most 1.8 mm of material above the tip. Expected gain is modest (~18% by a 40%-joint-strength estimate, not measured); more walls (pins are 4 mm, profile has 2 walls), less fan and printing on its side would matter more.
 
-### Arquivos gerados em `exemplos/`
-Todos com `--base 1`.
-- `funil-15graus.final.gcode`: **melhor candidato para a primeira impressão real**.
-- `funil-30graus.final.gcode`: exige folga maior que 12 mm.
-- `benchy-15graus.final.gcode`: forma correta.
-- `benchy-15graus-SO-VISUALIZAR.gcode`: Benchy plano transformado sem `deformar`, deformado. **Não imprimir.**
-
-### Resultados medidos
-| | Funil 30° | Funil 15° | Benchy 15° |
+## Measured results (older)
+| | Funnel 30° | Funnel 15° | Benchy 15° |
 |---|---|---|---|
-| Pontos de extrusão fora da peça | 0 de 162.636 | 0 de 135.636 | 15 de 187.684, até 0,1 mm |
-| Inclinação máxima | 30,3° | 15,5° | 20,2° |
-| Material acima da ponta do bico (máx.) | 9,9 mm | 6,0 mm | 6,8 mm (só medido até 30 mm do bico) |
-| Folga mínima para imprimir | mais de 12 mm | 7 mm | 8 mm |
-| Extrusão total após compensação | 94,0% | 99,4% | 92,4% |
-| Tempo estimado sem aceleração, Z a 5 mm/s | 61,5 min | 38,2 min | 63,3 min |
+| Extrusion points outside the part | 0 of 162,636 | 0 of 135,636 | 15 of 187,684, up to 0.1 mm |
+| Max slope | 30.3° | 15.5° | 20.2° |
+| Material above the nozzle tip (max) | 9.9 mm | 6.0 mm | 6.8 mm (measured up to 30 mm from the nozzle) |
+| Total extrusion after compensation | 94.0% | 99.4% | 92.4% |
 
-No Benchy, os controles deram 4 pontos fora de 85.474 no G-code plano e 32,75% fora no arquivo só para visualizar. Os scripts dessas medições estavam em pasta temporária, não no projeto: teste de dentro/fora contra o STL com raio vertical, e perfil de folga com mapa de alturas em grade de 1 mm, medindo o material acima da ponta por distância horizontal.
-
-### Primeira impressão real (2026-11-08)
-Funil a 15° (arquivo gerado antes do PR #3): o fan de peça (duto "5015 selftap", saídas laterais com vão de 27 × 14 mm em volta do bico) encostou em Z 17,67 mm. O ajuste do fan já está no máximo. Com o STL do duto e o bico em (10,9; 6,2; Zmín − 4,1), a checagem prevê a primeira colisão em Z 17,6 a 15° e nenhuma até 14°. A folga de 4,1 mm entre a ponta e a saída do duto foi deduzida da altura da colisão; falta medir.
-
-### Pendências, nesta ordem
-1. Usuário medir a folga do cabeçote: com a impressora fria e Z em 10 mm, medir da mesa até a parte mais baixa sem contar o bico e subtrair 10. Se der entre 5 e 7 mm, medir também as distâncias horizontais até o bico.
-2. Usuário informar `max_z_velocity` do `printer.cfg`.
-3. ~~Implementar a checagem de colisão no `retransformar` e aviso de velocidade do Z~~: feito (PR da etapa 2). Falta só usar a folga medida como `--folga`.
-4. Primeira impressão real: funil a 15°, velocidade a 50%, acompanhando de perto, sobretudo a partir de 8 mm, onde o funil abre.
-5. Depois do teste: atualizar o README, substituir a imagem do corte (com aprovação do usuário) e fazer o commit.
+## To do, in order
+1. Find out where the 8° funnel collided and fix the duct model, or drop the duct (fan off for ABS) and measure the rest of the head: printer cold, Z at 10 mm, measure from the bed to the lowest part excluding the nozzle, subtract 10.
+2. User to report `max_z_velocity` from `printer.cfg`.
+3. Break test of the glue clip, flat vs. 25°.
+4. Replace the side-cut image in the README (needs the user's approval).
+5. .dmg app.

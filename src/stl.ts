@@ -5,7 +5,10 @@ export type Vec3 = [number, number, number];
 export type Triangulo = [Vec3, Vec3, Vec3];
 
 export function lerStl(caminho: string): Triangulo[] {
-  const buf = readFileSync(caminho);
+  return lerStlDeBuffer(readFileSync(caminho));
+}
+
+export function lerStlDeBuffer(buf: Buffer): Triangulo[] {
   if (ehBinario(buf)) return lerBinario(buf);
   return lerAscii(buf.toString("utf8"));
 }
