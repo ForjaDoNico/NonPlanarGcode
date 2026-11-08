@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { Mapeamento } from "./conico.ts";
+import type { Superficie } from "./superficie.ts";
 import { CABECOTE_PADRAO } from "./colisao.ts";
 
 export interface Perfil {
@@ -26,16 +27,21 @@ export interface Perfil {
   cabecoteStl?: string;
   /** Posição da ponta do bico nas coordenadas desse STL. */
   bico?: [number, number, number];
+  /** Margem de segurança da checagem de colisão, em mm: o cabeçote é tratado como mais baixo. */
+  margem?: number;
 }
 
 export const PERFIL_PADRAO: Perfil = { ...CABECOTE_PADRAO, zMax: 0, segmento: 1 };
 
 export interface ParametrosPeca {
-  versao: 1;
+  /** 1: só cone (`mapa`). 2: superfície com formas e âncoras por altura (`superficie`). */
+  versao: 1 | 2;
+  /** Ângulo da primeira âncora, para referência. */
   anguloGraus: number;
   deslocamentoZ: number;
   centroRelativo: [number, number];
-  mapa: Mapeamento;
+  mapa?: Mapeamento;
+  superficie?: Superficie;
   /** Modo de topo liso: a última camada de topo segue a superfície do STL original. */
   topoLiso?: boolean;
   /** Caminho absoluto do STL original, usado pelo modo de topo liso. */

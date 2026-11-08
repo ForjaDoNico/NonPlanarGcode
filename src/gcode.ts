@@ -4,7 +4,8 @@
 // aplicamos o mapeamento inverso (ver conico.ts). Como Z passa a variar ao longo de cada
 // linha reta, os movimentos são quebrados em segmentos curtos.
 
-import { espessuraRelativa, paraReal, type Mapeamento } from "./conico.ts";
+import { campoDoMapeamento, type Mapeamento } from "./conico.ts";
+import { criarCampo, type Superficie } from "./superficie.ts";
 import { ehTrechoDeTopo, type MapaTopo } from "./topo.ts";
 import { checarColisao, checarVelocidadeZ, CABECOTE_PADRAO, type Cabecote, type PontoTrajeto, type RelatorioColisao, type RelatorioVelocidadeZ } from "./colisao.ts";
 
@@ -21,7 +22,10 @@ const Z_MINIMO_DESLOCAMENTO = 0.2;
 const FOLGA_DESLOCAMENTO_TOPO = 0.1;
 
 export interface ParametrosRetransformacao {
-  mapa: Mapeamento;
+  /** Mapeamento cônico da versão 1. Ignorado quando `superficie` é informada. */
+  mapa?: Mapeamento;
+  /** Superfície da versão 2 (formas e âncoras por altura). */
+  superficie?: Superficie;
   deslocamentoZ: number;
   /** Centro do cone relativo ao centro XY da peça. Usado quando `centro` não é informado. */
   centroRelativo?: [number, number];
@@ -47,6 +51,8 @@ export interface RelatorioRetransformacao {
   zMinimo: number;
   zMaximo: number;
   avisos: string[];
+  /** Os mesmos avisos como código e valores, para a interface traduzir. */
+  avisosCodigos: { codigo: string; valores: Record<string, number> }[];
   /** Resultado da checagem de colisão, ou null se ela foi desligada. */
   colisao: RelatorioColisao | null;
   velocidadeZ: RelatorioVelocidadeZ | null;
@@ -153,8 +159,12 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
   }
   const seg = params.segmento ?? 1;
   const fatorE = params.fatorExtrusao ?? 1;
+  if (!params.superficie && !params.mapa) throw new Error("Faltam os parâmetros da deformação (mapa ou superfície).");
+  const campo = params.superficie ? criarCampo(params.superficie) : campoDoMapeamento(params.mapa!);
   const zReal = (x: number, y: number, zl: number) =>
-    paraReal(params.mapa, Math.hypot(x - centro![0], y - centro![1]), zl + params.deslocamentoZ);
+    campo.paraReal(x - centro![0], y - centro![1], zl + params.deslocamentoZ);
+  const espessuraEm = (x: number, y: number, zl: number) =>
+    campo.espessura(x - centro![0], y - centro![1], zl + params.deslocamentoZ);
 
   // Posição no espaço deformado (como o fatiador vê).
   let x = 0, y = 0, z = 0, e = 0;
@@ -250,8 +260,7 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
       if (extrudindo && params.topo && ehTrechoDeTopo(tipo)) {
         const sup = alturaTopo(sx, sy);
         const fm = (i - 0.5) / n;
-        const espessuraAqui = params.topo.alturaCamada *
-          espessuraRelativa(params.mapa, Math.hypot(x + (nx - x) * fm - centro[0], y + (ny - y) * fm - centro[1]), sz + params.deslocamentoZ);
+        const espessuraAqui = params.topo.alturaCamada * espessuraEm(x + (nx - x) * fm, y + (ny - y) * fm, sz);
         const vao = sup === null ? 0 : sup - zr;
         // Só a última camada de topo: se o vão passa de uma camada, ainda vem outra por cima.
         if (sup !== null && vao > 0.005 && vao < espessuraAqui * 1.01) {
@@ -278,10 +287,7 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
       if (p.E !== undefined) {
         // Avalia a espessura no meio do segmento, para compensar o afinamento na transição.
         const fm = (i - 0.5) / n;
-        const raioMeio = Math.hypot(x + (nx - x) * fm - centro[0], y + (ny - y) * fm - centro[1]);
-        const espessura = extrudindo
-          ? espessuraRelativa(params.mapa, raioMeio, z + (nz - z) * fm + params.deslocamentoZ)
-          : 1;
+        const espessura = extrudindo ? espessuraEm(x + (nx - x) * fm, y + (ny - y) * fm, z + (nz - z) * fm) : 1;
         if (eRelativo) linha += ` E${fmt(((eFinal - eInicial) / n) * fatorE * espessura * fatorTopo, 5)}`;
         else {
           if (espessura !== 1 || fatorTopo !== 1) semCompensacao++;
@@ -296,23 +302,27 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
     x = nx; y = ny; z = nz; e = eFinal;
   }
 
+  const avisosCodigos: { codigo: string; valores: Record<string, number> }[] = [];
+  const avisar = (codigo: string, valores: Record<string, number>, texto: string) => { avisos.push(texto); avisosCodigos.push({ codigo, valores }); };
   if (fatorE !== 1 && !eRelativo)
-    avisos.push("O fator de extrusão só é aplicado com extrusão relativa (M83). Ative \"Use relative E distances\" no fatiador.");
+    avisar("fatorSemERelativo", {}, "O fator de extrusão só é aplicado com extrusão relativa (M83). Ative \"Use relative E distances\" no fatiador.");
   if (extrusoesAbaixoDaMesa > 0)
     throw new Error(`${extrusoesAbaixoDaMesa} pontos de extrusão ficariam abaixo da mesa. Use --base no passo deformar (recomendado) ou desative saia e brim no fatiador.`);
   if (deslocamentosElevados > 0)
-    avisos.push(`${deslocamentosElevados} pontos de deslocamento foram elevados a Z=${Z_MINIMO_DESLOCAMENTO} para o bico não raspar a mesa.`);
+    avisar("deslocamentosElevados", { n: deslocamentosElevados, z: Z_MINIMO_DESLOCAMENTO }, `${deslocamentosElevados} pontos de deslocamento foram elevados a Z=${Z_MINIMO_DESLOCAMENTO} para o bico não raspar a mesa.`);
   if (semCompensacao > 0)
-    avisos.push("A extrusão não foi compensada na zona de transição, onde as camadas ficam mais finas ou mais grossas. Ative \"Use relative E distances\" no fatiador.");
+    avisar("semCompensacao", {}, "A extrusão não foi compensada na zona de transição, onde as camadas ficam mais finas ou mais grossas. Ative \"Use relative E distances\" no fatiador.");
   const cabecote = params.cabecote === undefined ? CABECOTE_PADRAO : params.cabecote;
   const colisao = cabecote ? checarColisao(trajeto, cabecote) : null;
   const velocidadeZ = params.zMaximo ? checarVelocidadeZ(segmentosZ, params.zMaximo) : null;
   if (velocidadeZ && velocidadeZ.segmentosLimitados > 0)
-    avisos.push(
+    avisar(
+      "velocidadeZ",
+      { porcento: velocidadeZ.fracaoDoTrajeto * 100, limite: params.zMaximo!, maior: velocidadeZ.maiorVelocidadeZ },
       `${(velocidadeZ.fracaoDoTrajeto * 100).toFixed(0)}% do trajeto pede mais que ${params.zMaximo} mm/s no eixo Z ` +
       `(até ${velocidadeZ.maiorVelocidadeZ.toFixed(1)} mm/s). O firmware vai desacelerar esses trechos e a impressão fica mais lenta.`,
     );
-  if (transformadas === 0) avisos.push("Nenhum movimento foi transformado. O G-code tem marcadores ;LAYER_CHANGE?");
+  if (transformadas === 0) avisar("nadaTransformado", {}, "Nenhum movimento foi transformado. O G-code tem marcadores ;LAYER_CHANGE?");
 
   return {
     gcode: saida.join("\n"),
@@ -322,6 +332,7 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
     zMinimo: zMin,
     zMaximo: zMax,
     avisos,
+    avisosCodigos,
     colisao,
     velocidadeZ,
     pontosDeTopoAjustados: pontosDeTopo,

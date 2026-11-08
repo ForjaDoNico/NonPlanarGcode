@@ -12,6 +12,7 @@
 
 import type { Triangulo, Vec3 } from "./stl.ts";
 import { caixa } from "./stl.ts";
+import { criarCampo, transicaoAutomatica, validarSuperficie, type Ancora, type Campo, type Superficie, type Validacao } from "./superficie.ts";
 
 export interface ParametrosCone {
   /** Ângulo do cone em graus. */
@@ -136,4 +137,74 @@ export function deformarMalha(
     centroRelativo: [centro[0] - meioX, centro[1] - meioY],
     mapa,
   };
+}
+
+/** O mapeamento cônico antigo no formato de campo usado pelo retransformar. */
+export function campoDoMapeamento(m: Mapeamento): Campo {
+  return {
+    paraDeformado: (dx, dy, z) => paraDeformado(m, Math.hypot(dx, dy), z),
+    paraReal: (dx, dy, zl) => paraReal(m, Math.hypot(dx, dy), zl),
+    espessura: (dx, dy, zl) => espessuraRelativa(m, Math.hypot(dx, dy), zl),
+  };
+}
+
+export interface ResultadoSuperficie {
+  triangulos: Triangulo[];
+  deslocamentoZ: number;
+  centroRelativo: [number, number];
+  superficie: Superficie;
+  validacao: Validacao;
+}
+
+/** Pontos (dx, dy) da peça em volta do eixo, para escolher a transição e validar a superfície. */
+export function amostrasDaPeca(tris: Triangulo[], centro: [number, number], max = 4000): [number, number][] {
+  const todos: [number, number][] = [];
+  const vistos = new Set<string>();
+  for (const t of tris)
+    for (const [x, y] of t) {
+      const k = `${Math.round(x * 2)},${Math.round(y * 2)}`;
+      if (vistos.has(k)) continue;
+      vistos.add(k);
+      todos.push([x - centro[0], y - centro[1]]);
+    }
+  if (todos.length <= max) return todos;
+  const passo = todos.length / max;
+  return Array.from({ length: max }, (_, i) => todos[Math.floor(i * passo)]);
+}
+
+/**
+ * Deforma a malha com uma superfície (formas e âncoras por altura). Com uma âncora de cone,
+ * dá o mesmo resultado que `deformarMalha`.
+ */
+export function deformarComSuperficie(
+  trisOriginais: Triangulo[],
+  ancoras: Ancora[],
+  opcoes: { maxAresta?: number; centro?: [number, number]; base?: number; transicao?: number } = {},
+): ResultadoSuperficie {
+  if (ancoras.length === 0) throw new Error("Informe pelo menos uma âncora.");
+  const { min, max } = caixa(trisOriginais);
+  const meioX = (min[0] + max[0]) / 2, meioY = (min[1] + max[1]) / 2;
+  const centro = opcoes.centro ?? [meioX, meioY];
+  let raioPeca = 0;
+  for (const t of trisOriginais)
+    for (const [x, y] of t) raioPeca = Math.max(raioPeca, Math.hypot(x - centro[0], y - centro[1]));
+  const amostras = amostrasDaPeca(trisOriginais, centro);
+  const base = opcoes.base ?? 0;
+  const primeira = [...ancoras].sort((a, b) => a.z - b.z)[0];
+  const transicao = base > 0 ? (opcoes.transicao ?? transicaoAutomatica(primeira, raioPeca, amostras)) : 0;
+  const superficie: Superficie = { versao: 2, ancoras, base, transicao, raioPeca };
+  const validacao = validarSuperficie(superficie, amostras, max[2] - min[2]);
+  if (!validacao.ok) throw new Error(validacao.problema);
+  const campo = criarCampo(superficie);
+  const tris = subdividir(trisOriginais, opcoes.maxAresta ?? 1);
+  let zMin = Infinity;
+  const deformados = tris.map((t) =>
+    t.map(([x, y, z]) => {
+      const zn = campo.paraDeformado(x - centro[0], y - centro[1], z - min[2]);
+      if (zn < zMin) zMin = zn;
+      return [x, y, zn] as Vec3;
+    }) as Triangulo,
+  );
+  for (const t of deformados) for (const v of t) v[2] -= zMin;
+  return { triangulos: deformados, deslocamentoZ: zMin, centroRelativo: [centro[0] - meioX, centro[1] - meioY], superficie, validacao };
 }
