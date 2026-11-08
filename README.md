@@ -64,6 +64,18 @@ node src/cli.ts perfil                       # mostra
 
 Opções passadas direto no `retransformar` valem só naquela execução.
 
+## Topo liso
+
+Com camadas cônicas, um topo plano (ou qualquer topo que não tenha o formato do cone) sai em degraus da altura de uma camada. Com `--topo-liso` no `deformar`, a última camada de topo sobe até a superfície real da peça, e a extrusão aumenta na mesma proporção para preencher a camada mais grossa. Os deslocamentos sobre o topo passam por cima dele.
+
+```sh
+node src/cli.ts deformar peca.stl --angulo 15 --base 1 --topo-liso
+```
+
+O `retransformar` lê o STL original para conhecer a superfície, então não mova nem apague esse arquivo. Ele também lê a altura de camada que o fatiador grava no G-code. Funciona com os tipos "Top surface" (OrcaSlicer), "Top solid infill" (PrusaSlicer) e "Ironing". `--sem-topo-liso` desliga o modo numa execução.
+
+No funil de exemplo a 15°, a última camada do topo variava 0,15 mm de altura e passou a ficar toda a 28,00 mm. A extrusão do topo aumentou 22%.
+
 ## Checagem de colisão
 
 Com camadas cônicas, o material do lado de dentro da camada fica mais alto que a ponta do bico. Se ele passar da parte mais baixa do cabeçote (bloco aquecedor, carcaça, duto de ventilação), o cabeçote bate na peça. O `retransformar` simula a impressão inteira com um mapa de alturas e, se houver colisão, **não grava o arquivo** e diz onde ela aconteceria e de quanta folga o arquivo precisa.
@@ -85,9 +97,9 @@ Testes: `npm test`. Exemplo completo: `npm run funil`, e depois os comandos acim
 ## Limitações conhecidas
 
 - **Colisão:** a checagem usa um modelo simples do cabeçote (um cilindro fino para o bico e um plano para o resto). Ela não conhece o formato exato do seu cabeçote, então um duto que desce mais de um lado precisa ser medido pelo lado mais baixo.
-- **Topos planos ficam em degraus**, porque para a malha deformada eles viram superfícies inclinadas. O próximo modo (camadas de topo que seguem a superfície) resolve isso.
+- **Topos ficam em degraus** sem `--topo-liso`. Com ele, só a última camada sobe até a superfície, então a camada de baixo ainda tem degraus, que ficam escondidos.
 - **Deslocamentos longos sobem e descem** junto com o cone. Não colidem com o que já foi impresso, mas são mais lentos.
-- A espessura real da camada, medida perpendicular ao cone, é `altura × cos(θ)`. A extrusão só é compensada na zona de transição da base; esse efeito do cone ainda não é compensado (`--fator-e` existe para testes manuais).
+- A camada cônica é mais fina na perpendicular (`altura × cos θ`), mas o volume entre duas camadas é o mesmo das camadas planas, então a extrusão do fatiador já está certa. Só a zona de transição da base precisa de compensação, e ela é feita (`--fator-e` existe para testes manuais).
 - **Saia e brim sem `--base`:** com θ positivo, o trecho fora da peça ficaria abaixo da mesa, e o `retransformar` recusa o G-code com um erro.
 - Um eixo de cone por peça. Várias peças na mesa ainda não são suportadas.
 

@@ -5,6 +5,7 @@
 // linha reta, os movimentos são quebrados em segmentos curtos.
 
 import { espessuraRelativa, paraReal, type Mapeamento } from "./conico.ts";
+import { ehTrechoDeTopo, type MapaTopo } from "./topo.ts";
 import { checarColisao, checarVelocidadeZ, CABECOTE_PADRAO, type Cabecote, type PontoTrajeto, type RelatorioColisao, type RelatorioVelocidadeZ } from "./colisao.ts";
 
 /** Comentário gravado no G-code transformado, para nunca transformar o mesmo arquivo duas vezes. */
@@ -16,6 +17,8 @@ export function jaTransformado(gcode: string): boolean {
 
 // Altura mínima dos deslocamentos sem extrusão, para o bico não raspar a mesa.
 const Z_MINIMO_DESLOCAMENTO = 0.2;
+// Folga dos deslocamentos sobre o topo liso, em mm.
+const FOLGA_DESLOCAMENTO_TOPO = 0.1;
 
 export interface ParametrosRetransformacao {
   mapa: Mapeamento;
@@ -32,6 +35,8 @@ export interface ParametrosRetransformacao {
   cabecote?: Cabecote | null;
   /** Velocidade máxima do eixo Z no firmware, em mm/s (max_z_velocity no Klipper). */
   zMaximo?: number;
+  /** Modo de topo liso: superfície real da peça e altura de camada do fatiamento. */
+  topo?: { mapa: MapaTopo; alturaCamada: number };
 }
 
 export interface RelatorioRetransformacao {
@@ -45,6 +50,8 @@ export interface RelatorioRetransformacao {
   /** Resultado da checagem de colisão, ou null se ela foi desligada. */
   colisao: RelatorioColisao | null;
   velocidadeZ: RelatorioVelocidadeZ | null;
+  /** Pontos do topo que subiram até a superfície real (modo de topo liso). */
+  pontosDeTopoAjustados: number;
 }
 
 // Tipos de trecho que não pertencem à peça e não entram no cálculo do centro.
@@ -160,13 +167,20 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
   const saida: string[] = [];
   const trajeto: PontoTrajeto[] = [];
   const segmentosZ: { dxy: number; dz: number; f: number }[] = [];
-  let fAtual = 0;
+  let fAtual = 0, tipo = "", pontosDeTopo = 0;
+  // Centro da peça na mesa, para converter coordenadas da mesa em coordenadas do modelo.
+  const rel = params.centroRelativo ?? [0, 0];
+  const centroPeca = [centro[0] - rel[0], centro[1] - rel[1]];
+  const alturaTopo = (x: number, y: number) =>
+    params.topo ? params.topo.mapa.altura(x - centroPeca[0] + params.topo.mapa.centro[0], y - centroPeca[1] + params.topo.mapa.centro[1]) : null;
   let anterior: { x: number; y: number; z: number } | null = null;
   const inicioDoFinal = encontrarInicioDoFinal(linhas);
 
   if (jaTransformado(texto)) throw new Error("Este G-code já foi transformado pelo naoplanar.");
   let marcou = false;
   for (const [indice, bruta] of linhas.entries()) {
+    const tipoNovo = tipoDaLinha(bruta);
+    if (tipoNovo !== null) tipo = tipoNovo;
     if (indice < inicioDoFinal && ehMudancaDeCamada(bruta)) {
       ativo = true;
       if (!marcou) { saida.push(MARCADOR_TRANSFORMADO); marcou = true; }
@@ -232,6 +246,26 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
       const sx = x + (nx - x) * f, sy = y + (ny - y) * f, sz = z + (nz - z) * f;
       let zr = zReal(sx, sy, sz);
       if (extrudindo && zr < -0.01) extrusoesAbaixoDaMesa++;
+      let fatorTopo = 1;
+      if (extrudindo && params.topo && ehTrechoDeTopo(tipo)) {
+        const sup = alturaTopo(sx, sy);
+        const fm = (i - 0.5) / n;
+        const espessuraAqui = params.topo.alturaCamada *
+          espessuraRelativa(params.mapa, Math.hypot(x + (nx - x) * fm - centro[0], y + (ny - y) * fm - centro[1]), sz + params.deslocamentoZ);
+        const vao = sup === null ? 0 : sup - zr;
+        // Só a última camada de topo: se o vão passa de uma camada, ainda vem outra por cima.
+        if (sup !== null && vao > 0.005 && vao < espessuraAqui * 1.01) {
+          zr = sup;
+          fatorTopo = 1 + vao / espessuraAqui;
+          pontosDeTopo++;
+        }
+      }
+      if (!extrudindo && params.topo) {
+        // Deslocamentos perto do topo passam por cima da camada que subiu até a superfície,
+        // em vez de atravessá-la na altura do cone.
+        const sup = alturaTopo(sx, sy);
+        if (sup !== null && sup > zr && sup - zr < params.topo.alturaCamada * 1.01) zr = sup + FOLGA_DESLOCAMENTO_TOPO;
+      }
       if (!extrudindo && zr < Z_MINIMO_DESLOCAMENTO) { zr = Z_MINIMO_DESLOCAMENTO; deslocamentosElevados++; }
       zr = Math.max(zr, 0);
       if (zr < zMin) zMin = zr;
@@ -248,9 +282,9 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
         const espessura = extrudindo
           ? espessuraRelativa(params.mapa, raioMeio, z + (nz - z) * fm + params.deslocamentoZ)
           : 1;
-        if (eRelativo) linha += ` E${fmt(((eFinal - eInicial) / n) * fatorE * espessura, 5)}`;
+        if (eRelativo) linha += ` E${fmt(((eFinal - eInicial) / n) * fatorE * espessura * fatorTopo, 5)}`;
         else {
-          if (espessura !== 1) semCompensacao++;
+          if (espessura !== 1 || fatorTopo !== 1) semCompensacao++;
           linha += ` E${fmt(eInicial + (eFinal - eInicial) * f, 5)}`;
         }
       }
@@ -290,5 +324,6 @@ export function retransformarGcode(texto: string, params: ParametrosRetransforma
     avisos,
     colisao,
     velocidadeZ,
+    pontosDeTopoAjustados: pontosDeTopo,
   };
 }

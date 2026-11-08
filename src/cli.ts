@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Linha de comando do naoplanar.
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { alturaDeCamada, criarMapaTopo } from "./topo.ts";
 import { parseArgs } from "node:util";
 import { lerStl, escreverStl } from "./stl.ts";
 import { deformarMalha, type Mapeamento } from "./conico.ts";
@@ -30,6 +32,8 @@ Opções de deformar:
   --base     altura em mm das primeiras camadas planas, para aderir à mesa (padrão 0)
   --aresta   tamanho máximo de aresta após subdividir a malha, em mm (padrão 1)
   --centro   eixo do cone x,y em coordenadas do modelo (padrão: centro da peça)
+  --topo-liso  a última camada de topo segue a superfície real da peça, sem degraus.
+             O retransformar vai precisar do STL original no mesmo lugar.
   --saida    nome do STL deformado
 
 Opções de retransformar:
@@ -38,6 +42,7 @@ Opções de retransformar:
   --centro   eixo do cone x,y na mesa (padrão: detectado no G-code)
   --segmento comprimento máximo de cada segmento em mm (padrão 1)
   --fator-e  multiplicador de extrusão (padrão 1)
+  --sem-topo-liso  ignora o modo de topo liso escolhido no deformar
   --saida    arquivo de saída
 
 Checagem de colisão (feita no retransformar; se houver colisão, nada é gravado).
@@ -79,7 +84,7 @@ function principal(argv: string[]): void {
       centro: { type: "string" }, saida: { type: "string" }, params: { type: "string" },
       segmento: { type: "string" }, "fator-e": { type: "string" }, ajuda: { type: "boolean", short: "h" },
       folga: { type: "string" }, "raio-cabeca": { type: "string" }, "raio-bico": { type: "string" },
-      "z-max": { type: "string" }, "ignorar-colisao": { type: "boolean" }, "sem-checar-colisao": { type: "boolean" },
+      "z-max": { type: "string" }, "topo-liso": { type: "boolean" }, "sem-topo-liso": { type: "boolean" }, "ignorar-colisao": { type: "boolean" }, "sem-checar-colisao": { type: "boolean" },
     },
   });
   const [comando, arquivo] = positionals;
@@ -124,6 +129,7 @@ function principal(argv: string[]): void {
     const params: ParametrosPeca = {
       versao: 1, anguloGraus: angulo, deslocamentoZ: r.deslocamentoZ,
       centroRelativo: r.centroRelativo, mapa: r.mapa,
+      ...(o["topo-liso"] ? { topoLiso: true, stlOriginal: resolve(arquivo) } : {}),
     };
     writeFileSync(json, JSON.stringify(params, null, 2));
     const registro = registrarPeca(nomeDaPeca(saida), params);
@@ -167,6 +173,14 @@ function principal(argv: string[]): void {
       params = a.params;
       console.log(`Parâmetros da peça: ${a.caminho}`);
     }
+    let topo: { mapa: ReturnType<typeof criarMapaTopo>; alturaCamada: number } | undefined;
+    if (params.topoLiso && !o["sem-topo-liso"]) {
+      const h = alturaDeCamada(texto);
+      if (!params.stlOriginal || !existsSync(params.stlOriginal))
+        throw new Error(`O modo de topo liso precisa do STL original, que não está mais em ${params.stlOriginal}. Rode o deformar de novo ou use --sem-topo-liso.`);
+      if (!h) throw new Error("Não achei a altura de camada (layer_height) no G-code, que o modo de topo liso precisa. Use --sem-topo-liso.");
+      topo = { mapa: criarMapaTopo(lerStl(params.stlOriginal)), alturaCamada: h };
+    }
     const perfil = lerPerfil();
     const folga = numero(o.folga, "folga", perfil.folga);
     const zMax = numero(o["z-max"], "z-max", perfil.zMax);
@@ -183,6 +197,7 @@ function principal(argv: string[]): void {
         raioBico: numero(o["raio-bico"], "raio-bico", perfil.raioBico),
       },
       zMaximo: zMax > 0 ? zMax : undefined,
+      topo,
     });
     const c = r.colisao;
     if (c && c.colisoes > 0) {
@@ -202,6 +217,7 @@ function principal(argv: string[]): void {
     console.log(`G-code não planar: ${saida}`);
     console.log(`Centro do cone na mesa: X${r.centro[0].toFixed(2)} Y${r.centro[1].toFixed(2)}`);
     console.log(`${r.linhasTransformadas} movimentos viraram ${r.segmentosGerados} segmentos; Z de ${r.zMinimo.toFixed(2)} a ${r.zMaximo.toFixed(2)} mm`);
+    if (topo) console.log(`Topo liso: ${r.pontosDeTopoAjustados} pontos do topo subiram até a superfície da peça`);
     if (c) console.log(`Folga necessária no cabeçote: ${c.folgaNecessaria.toFixed(1)} mm${c.colisoes ? "" : " (sem colisões)"}`);
     for (const a of r.avisos) console.warn(`Aviso: ${a}`);
     return;

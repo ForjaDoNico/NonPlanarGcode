@@ -32,6 +32,10 @@ export interface ParametrosPeca {
   deslocamentoZ: number;
   centroRelativo: [number, number];
   mapa: Mapeamento;
+  /** Modo de topo liso: a última camada de topo segue a superfície do STL original. */
+  topoLiso?: boolean;
+  /** Caminho absoluto do STL original, usado pelo modo de topo liso. */
+  stlOriginal?: string;
 }
 
 export function pastaConfig(): string {
