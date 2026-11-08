@@ -71,3 +71,18 @@ test("velocidade de Z: avisa só os segmentos acima do limite", () => {
   assert.equal(r.segmentosLimitados, 1);
   assert.ok(r.maiorVelocidadeZ > 40 && r.maiorVelocidadeZ < 50);
 });
+
+import { folgaDoStl } from "../src/cabecote.ts";
+import type { Triangulo } from "../src/stl.ts";
+
+test("formato do cabeçote: saída só de um lado libera o outro", () => {
+  // Placa horizontal de 10 × 10 mm, 3 mm acima da ponta do bico, entre x = 5 e 15 (só do lado +X).
+  const placa: Triangulo[] = [[[5, -5, 3], [15, -5, 3], [15, 5, 3]], [[5, -5, 3], [15, 5, 3], [5, 5, 3]]];
+  const formato = folgaDoStl(placa, [0, 0, 0]);
+  assert.ok(Math.abs(formato.em(10, 0)! - 3) < 1e-9);
+  assert.equal(formato.em(-10, 0), null);
+  const cab = { folga: 20, raioCabeca: 20, raioBico: 1.5, formato };
+  const parede = (x: number): PontoTrajeto[] => [{ x, y: 0, z: 5, extrudindo: true }, { x: 0, y: 0, z: 0.5, extrudindo: false }];
+  assert.equal(checarColisao(parede(10), cab).colisoes, 1, "material 4,5 mm acima, sob a placa de 3 mm: bate");
+  assert.equal(checarColisao(parede(-10), cab).colisoes, 0, "do outro lado não há cabeçote baixo");
+});

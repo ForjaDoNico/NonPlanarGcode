@@ -22,6 +22,10 @@ export interface Perfil {
   zMax: number;
   /** Comprimento máximo dos segmentos, em mm. */
   segmento: number;
+  /** STL de uma parte do cabeçote (por exemplo, o duto do fan), com Z para cima. Opcional. */
+  cabecoteStl?: string;
+  /** Posição da ponta do bico nas coordenadas desse STL. */
+  bico?: [number, number, number];
 }
 
 export const PERFIL_PADRAO: Perfil = { ...CABECOTE_PADRAO, zMax: 0, segmento: 1 };
