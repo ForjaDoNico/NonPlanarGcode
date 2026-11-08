@@ -8,6 +8,7 @@ Projeto open source de fatiamento não planar (camadas cônicas) para impressora
 3. `src/gcode.ts`: desfaz a deformação no G-code, quebrando cada movimento em segmentos de até 1 mm.
 - `src/colisao.ts`: checagem de colisão do cabeçote (mapa de alturas) e aviso de velocidade do Z, chamada pelo `retransformar`.
 - `src/config.ts`: perfil da impressora (`~/.naoplanar/perfil.json`) e registro das peças deformadas (`~/.naoplanar/pecas/<nome>.json`). O `retransformar` sem `--params` acha a peça pelo nome `<nome>.naoplanar` no G-code, o que permite usá-lo como script de pós-processamento do OrcaSlicer. Pasta sobreposta por `NAOPLANAR_DIR` (usado nos testes).
+- `src/cabecote.ts`: formato real de parte do cabeçote a partir de um STL (`perfil --cabecote-stl --bico x,y,z`). Mapa da menor altura do cabeçote por ponto em volta do bico; a checagem usa min(folga geral, folga do formato) em cada vizinho.
 - `src/topo.ts`: modo de topo liso (`--topo-liso`). Mapa de alturas do STL original; no `retransformar`, pontos de topo a menos de uma camada da superfície sobem até ela, com extrusão proporcional, e deslocamentos perto do topo passam por cima.
 - `src/cli.ts`: comandos `deformar`, `retransformar` e `perfil`. `src/stl.ts`: leitura e escrita de STL.
 - `ferramentas/`: gerador do modelo de teste (funil) e verificador que gera um corte lateral em SVG.
@@ -61,6 +62,9 @@ Todos com `--base 1`.
 | Tempo estimado sem aceleração, Z a 5 mm/s | 61,5 min | 38,2 min | 63,3 min |
 
 No Benchy, os controles deram 4 pontos fora de 85.474 no G-code plano e 32,75% fora no arquivo só para visualizar. Os scripts dessas medições estavam em pasta temporária, não no projeto: teste de dentro/fora contra o STL com raio vertical, e perfil de folga com mapa de alturas em grade de 1 mm, medindo o material acima da ponta por distância horizontal.
+
+### Primeira impressão real (2026-11-08)
+Funil a 15° (arquivo gerado antes do PR #3): o fan de peça (duto "5015 selftap", saídas laterais com vão de 27 × 14 mm em volta do bico) encostou em Z 17,67 mm. O ajuste do fan já está no máximo. Com o STL do duto e o bico em (10,9; 6,2; Zmín − 4,1), a checagem prevê a primeira colisão em Z 17,6 a 15° e nenhuma até 14°. A folga de 4,1 mm entre a ponta e a saída do duto foi deduzida da altura da colisão; falta medir.
 
 ### Pendências, nesta ordem
 1. Usuário medir a folga do cabeçote: com a impressora fria e Z em 10 mm, medir da mesa até a parte mais baixa sem contar o bico e subtrair 10. Se der entre 5 e 7 mm, medir também as distâncias horizontais até o bico.

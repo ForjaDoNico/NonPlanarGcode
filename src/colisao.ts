@@ -14,9 +14,16 @@
 //
 // Usa um mapa de alturas em grade: cada célula guarda a maior altura de material depositada nela.
 
+import type { FolgaDoCabecote } from "./cabecote.ts";
+
 export interface Cabecote {
-  /** Altura livre entre a ponta do bico e a parte mais baixa do cabeçote, em mm. */
+  /**
+   * Altura livre entre a ponta do bico e a parte mais baixa do cabeçote, em mm. Com `formato`,
+   * vale para o que não está no STL (bloco aquecedor, carcaça).
+   */
   folga: number;
+  /** Formato real de uma parte do cabeçote (ver cabecote.ts). Onde ele existe, usa a menor folga. */
+  formato?: FolgaDoCabecote;
   /** Distância horizontal máxima, a partir do bico, que o cabeçote ocupa, em mm. */
   raioCabeca: number;
   /** Raio em volta da ponta que é ignorado (o bico alisa o material vizinho), em mm. */
@@ -71,11 +78,14 @@ export function checarColisao(pontos: PontoTrajeto[], cab: Cabecote = CABECOTE_P
 
   // Deslocamentos de células dentro do anel entre raioBico e raioCabeca, com a distância de cada um.
   const raioCel = Math.ceil(cab.raioCabeca / CELULA);
-  const vizinhos: { dx: number; dy: number; d: number }[] = [];
+  // Cada vizinho tem a sua folga: a geral, ou a do formato do cabeçote se ela for menor.
+  const vizinhos: { dx: number; dy: number; d: number; folga: number }[] = [];
   for (let dy = -raioCel; dy <= raioCel; dy++)
     for (let dx = -raioCel; dx <= raioCel; dx++) {
       const d = Math.hypot(dx, dy) * CELULA;
-      if (d > cab.raioBico && d <= cab.raioCabeca) vizinhos.push({ dx, dy, d });
+      if (d <= cab.raioBico || d > cab.raioCabeca) continue;
+      const doFormato = cab.formato?.em(dx * CELULA, dy * CELULA) ?? null;
+      vizinhos.push({ dx, dy, d, folga: doFormato === null ? cab.folga : Math.min(cab.folga, doFormato) });
     }
 
   let colisoes = 0, folgaNecessaria = 0;
@@ -83,15 +93,17 @@ export function checarColisao(pontos: PontoTrajeto[], cab: Cabecote = CABECOTE_P
 
   for (const p of pontos) {
     const cx = Math.round((p.x - minX) / CELULA), cy = Math.round((p.y - minY) / CELULA);
-    let maiorAcima = -Infinity, distMaior = 0;
+    // "Folga necessária" compara com a folga geral: quanto ela precisaria ser, mantido o formato.
+    let maiorAcima = -Infinity, invasao = -Infinity, distMaior = 0;
     for (const v of vizinhos) {
       const ix = cx + v.dx, iy = cy + v.dy;
       if (ix < 0 || iy < 0 || ix >= larg || iy >= alt) continue;
       const acima = mapa[iy * larg + ix] - p.z;
-      if (acima > maiorAcima) { maiorAcima = acima; distMaior = v.d; }
+      if (acima > maiorAcima) maiorAcima = acima;
+      const inv = acima - v.folga;
+      if (inv > invasao) { invasao = inv; distMaior = v.d; }
     }
     if (maiorAcima > folgaNecessaria) folgaNecessaria = maiorAcima;
-    const invasao = maiorAcima - cab.folga;
     if (invasao > TOLERANCIA) {
       colisoes++;
       const c: Colisao = { x: p.x, y: p.y, z: p.z, invasao, distancia: distMaior };

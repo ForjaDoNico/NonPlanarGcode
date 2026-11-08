@@ -3,6 +3,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { alturaDeCamada, criarMapaTopo } from "./topo.ts";
+import { folgaDoStl } from "./cabecote.ts";
 import { parseArgs } from "node:util";
 import { lerStl, escreverStl } from "./stl.ts";
 import { deformarMalha, type Mapeamento } from "./conico.ts";
@@ -25,6 +26,9 @@ Fluxo:
 Perfil da impressora (salvo em ~/.naoplanar/perfil.json, usado pelo retransformar):
   naoplanar perfil                          mostra o perfil atual
   naoplanar perfil --folga 7 --z-max 5      salva os valores informados
+  naoplanar perfil --cabecote-stl duto.stl --bico x,y,z
+        usa o formato real de uma parte do cabeçote (Z para cima, como montado); --bico é
+        a ponta do bico nas coordenadas desse STL. A --folga passa a valer para o resto.
 
 Opções de deformar:
   --angulo   graus do cone. Positivo: camadas descem para fora (balanços para fora).
@@ -84,7 +88,7 @@ function principal(argv: string[]): void {
       centro: { type: "string" }, saida: { type: "string" }, params: { type: "string" },
       segmento: { type: "string" }, "fator-e": { type: "string" }, ajuda: { type: "boolean", short: "h" },
       folga: { type: "string" }, "raio-cabeca": { type: "string" }, "raio-bico": { type: "string" },
-      "z-max": { type: "string" }, "topo-liso": { type: "boolean" }, "sem-topo-liso": { type: "boolean" }, "ignorar-colisao": { type: "boolean" }, "sem-checar-colisao": { type: "boolean" },
+      "z-max": { type: "string" }, "topo-liso": { type: "boolean" }, "cabecote-stl": { type: "string" }, bico: { type: "string" }, "sem-topo-liso": { type: "boolean" }, "ignorar-colisao": { type: "boolean" }, "sem-checar-colisao": { type: "boolean" },
     },
   });
   const [comando, arquivo] = positionals;
@@ -97,6 +101,17 @@ function principal(argv: string[]): void {
     if (o["raio-bico"] !== undefined) mudancas.raioBico = numero(o["raio-bico"], "raio-bico");
     if (o["z-max"] !== undefined) mudancas.zMax = numero(o["z-max"], "z-max");
     if (o.segmento !== undefined) mudancas.segmento = numero(o.segmento, "segmento");
+    if (o["cabecote-stl"] !== undefined) {
+      const caminho = resolve(o["cabecote-stl"]);
+      if (!existsSync(caminho)) throw new Error(`Não achei o STL do cabeçote: ${caminho}`);
+      if (!o.bico) throw new Error("Com --cabecote-stl, informe também --bico x,y,z: a ponta do bico nas coordenadas desse STL.");
+      mudancas.cabecoteStl = caminho;
+    }
+    if (o.bico !== undefined) {
+      const v = o.bico.split(",").map(Number);
+      if (v.length !== 3 || !v.every(Number.isFinite)) throw new Error(`Valor inválido para --bico: ${o.bico} (use x,y,z)`);
+      mudancas.bico = v as [number, number, number];
+    }
     if (Object.keys(mudancas).length) {
       const { perfil, caminho } = salvarPerfil(mudancas);
       console.log(`Perfil salvo em ${caminho}:`);
@@ -195,6 +210,7 @@ function principal(argv: string[]): void {
         folga,
         raioCabeca: numero(o["raio-cabeca"], "raio-cabeca", perfil.raioCabeca),
         raioBico: numero(o["raio-bico"], "raio-bico", perfil.raioBico),
+        formato: perfil.cabecoteStl && perfil.bico ? folgaDoStl(lerStl(perfil.cabecoteStl), perfil.bico) : undefined,
       },
       zMaximo: zMax > 0 ? zMax : undefined,
       topo,
@@ -206,9 +222,11 @@ function principal(argv: string[]): void {
         `O cabeçote bateria na peça em ${c.colisoes} pontos. ` +
         `A primeira colisão é em X${p.x.toFixed(1)} Y${p.y.toFixed(1)} Z${p.z.toFixed(1)}, com material ${p.invasao.toFixed(1)} mm ` +
         `acima da parte mais baixa do cabeçote, a ${p.distancia.toFixed(1)} mm do bico (a pior passa ${pior.invasao.toFixed(1)} mm). ` +
-        `Este arquivo precisa de pelo menos ${c.folgaNecessaria.toFixed(1)} mm de folga, e a configurada é ` +
-        `${folga} mm${perfilFoiConfigurado() ? "" : " (valor padrão, sem perfil salvo)"}. Diminua o --angulo no passo deformar, ` +
-        `ou salve a folga real do seu cabeçote com "naoplanar perfil --folga N".`;
+        (perfil.cabecoteStl
+          ? `A colisão considera o formato do cabeçote em ${perfil.cabecoteStl}. Diminua o --angulo no passo deformar.`
+          : `Este arquivo precisa de pelo menos ${c.folgaNecessaria.toFixed(1)} mm de folga, e a configurada é ` +
+            `${folga} mm${perfilFoiConfigurado() ? "" : " (valor padrão, sem perfil salvo)"}. Diminua o --angulo no passo deformar, ` +
+            `ou salve a folga real do seu cabeçote com "naoplanar perfil --folga N".`);
       if (!o["ignorar-colisao"]) throw new Error(msg + " Nada foi gravado. Use --ignorar-colisao para gravar mesmo assim.");
       console.warn(`Aviso: ${msg}`);
     }
@@ -218,7 +236,8 @@ function principal(argv: string[]): void {
     console.log(`Centro do cone na mesa: X${r.centro[0].toFixed(2)} Y${r.centro[1].toFixed(2)}`);
     console.log(`${r.linhasTransformadas} movimentos viraram ${r.segmentosGerados} segmentos; Z de ${r.zMinimo.toFixed(2)} a ${r.zMaximo.toFixed(2)} mm`);
     if (topo) console.log(`Topo liso: ${r.pontosDeTopoAjustados} pontos do topo subiram até a superfície da peça`);
-    if (c) console.log(`Folga necessária no cabeçote: ${c.folgaNecessaria.toFixed(1)} mm${c.colisoes ? "" : " (sem colisões)"}`);
+    if (c && perfil.cabecoteStl) console.log(`Colisão checada com o formato do cabeçote${c.colisoes ? "" : ": sem colisões"}`);
+    else if (c) console.log(`Folga necessária no cabeçote: ${c.folgaNecessaria.toFixed(1)} mm${c.colisoes ? "" : " (sem colisões)"}`);
     for (const a of r.avisos) console.warn(`Aviso: ${a}`);
     return;
   }

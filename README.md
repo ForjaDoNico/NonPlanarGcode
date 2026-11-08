@@ -90,6 +90,20 @@ Salve o valor no perfil (`node src/cli.ts perfil --folga 7`). Sem perfil, o padr
 
 Referência, com o funil de exemplo e `--base 1`: a 15° ele precisa de 5,8 mm de folga, e a 30° precisa de 9,8 mm. Como regra geral, a folga necessária cresce com `largura da peça × tan(θ)`.
 
+### Formato real do cabeçote
+
+O modelo padrão trata o cabeçote como um disco plano em volta do bico. Se uma parte baixa do cabeçote tem formato irregular (por exemplo, um duto de fan com saídas só dos lados), dá para usar o STL dela:
+
+```sh
+node src/cli.ts perfil --cabecote-stl duto.stl --bico 10.9,6.2,-27.65 --folga 8
+```
+
+- O STL precisa estar com Z para cima, na orientação em que está montado.
+- `--bico` é a posição da ponta do bico nas coordenadas desse STL: no centro entre as saídas, abaixo da parte mais baixa do duto pela folga medida.
+- `--folga` passa a valer para o resto do cabeçote (bloco aquecedor, carcaça), e em cada ponto vale a menor das duas.
+
+Com o duto 5015 da Ender-3 V3 SE do autor, o funil passou de 9° no modelo de disco para 14° sem colisão. A 15°, a primeira colisão prevista foi em Z 17,6 mm, e na impressão real o fan encostou em Z 17,67 mm.
+
 `--z-max` recebe o `max_z_velocity` do firmware e avisa quando o firmware vai desacelerar a impressão porque o Z não acompanha.
 
 Testes: `npm test`. Exemplo completo: `npm run funil`, e depois os comandos acima com `exemplos/funil.stl`.
